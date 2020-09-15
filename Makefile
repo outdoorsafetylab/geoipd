@@ -4,6 +4,12 @@ PBGO := $(PROTOS:.proto=.pb.go)
 EXEC := geoipd
 GOFILES := go.mod $(wildcard *.go) $(wildcard */*.go)
 
+VARS :=
+VARS += GitTime=$(shell git show -s --format=%ct HEAD || date +'%s')
+VARS += GitHash=$(shell git rev-parse --short HEAD || echo "$$SHORT_SHA")
+VARS += GitTag=$(shell git describe --tags --exact-match 2>/dev/null || echo "$$TAG_NAME")
+LDFLAGS := $(addprefix -X main.,$(VARS))
+
 all: $(EXEC) $(PBJS)
 
 include .make/golangci-lint.mk
