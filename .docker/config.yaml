@@ -1,0 +1,10 @@
+geoip2:
+  edition: GeoLite2-City
+  renew: 86400s
+port: 8080
+endpoint: /v1
+redis:
+  host: 127.0.0.1
+  port: 6379
+  pass:
+  expire: 86400s

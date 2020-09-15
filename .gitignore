@@ -1,0 +1,6 @@
+/.tool
+/go.sum
+/geoipd
+*.pb.go
+*.mmdb
+secret.yaml
