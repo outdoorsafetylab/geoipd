@@ -28,11 +28,11 @@ lint: $(GOLANGCI_LINT)
 test:
 	go test -count=1 ./test
 
-$(EXEC): .git/HEAD $(PBGO) $(GOFILES)
+$(EXEC): $(PBGO) $(GOFILES)
 	go mod tidy
 	go build -ldflags="$(LDFLAGS)" -o $@
 
-clean/proto: 
+clean/proto:
 	rm -f $(PBGO)
 
 clean: clean/golangci-lint clean/protoc clean/protoc-gen-go clean/watcher clean/backend clean/proto
