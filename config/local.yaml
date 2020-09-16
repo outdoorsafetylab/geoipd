@@ -1,11 +1,11 @@
 dev: true
 geoip2:
   edition: GeoLite2-Country
-  renew: 60s
+  renew: 10s
 port: 8080
 endpoint: /v1
 redis:
   host: 127.0.0.1
   port: 6379
   pass:
-  expire: 60s
+  expire: 5s
