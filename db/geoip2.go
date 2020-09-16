@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crosstalkio/log"
@@ -85,6 +86,8 @@ type City struct {
 }
 
 func QueryCity(ip net.IP) (*City, error) {
+	db.Lock()
+	defer db.Unlock()
 	res, err := db.reader.City(ip)
 	if err != nil {
 		return nil, err
@@ -103,6 +106,8 @@ type Country struct {
 }
 
 func QueryCountry(ip net.IP) (*Country, error) {
+	db.Lock()
+	defer db.Unlock()
 	res, err := db.reader.Country(ip)
 	if err != nil {
 		return nil, err
@@ -115,6 +120,7 @@ func QueryCountry(ip net.IP) (*Country, error) {
 }
 
 type geoIP2DB struct {
+	sync.Mutex
 	licenseKey string
 	edition    string
 	etag       string
@@ -131,7 +137,7 @@ func newGeoIP2DB(licenseKey, edition string) *geoIP2DB {
 }
 
 func (db *geoIP2DB) renew(s log.Sugar) error {
-	path, err := db.donwload(s)
+	path, err := db.download(s)
 	if err != nil {
 		return err
 	}
@@ -139,11 +145,17 @@ func (db *geoIP2DB) renew(s log.Sugar) error {
 		return nil
 	}
 	s.Infof("Opening DB: %s", path)
-	db.reader, err = geoip2.Open(path)
+	reader, err := geoip2.Open(path)
 	if err != nil {
 		s.Fatalf("Failed to open GeoIP2: %s", err.Error())
 		return err
 	}
+	db.Lock()
+	if db.reader != nil {
+		db.reader.Close()
+	}
+	db.reader = reader
+	db.Unlock()
 	if db.path != "" {
 		s.Infof("Deleting outdated DB: %s", db.path)
 		os.Remove(db.path)
@@ -152,7 +164,7 @@ func (db *geoIP2DB) renew(s log.Sugar) error {
 	return nil
 }
 
-func (db *geoIP2DB) donwload(s log.Sugar) (string, error) {
+func (db *geoIP2DB) download(s log.Sugar) (string, error) {
 	url := fmt.Sprintf("https://download.maxmind.com/app/geoip_download?edition_id=%s&license_key=%s&suffix=tar.gz", db.edition, db.licenseKey)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
