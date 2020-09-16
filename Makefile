@@ -9,7 +9,7 @@ GIT_HASH ?= $(shell git rev-parse --short HEAD)
 GIT_TAG ?= $(shell git describe --tags --exact-match 2>/dev/null || echo "")
 
 VARS :=
-VARS += GitTime=$(BUILD_TIME)
+VARS += BuildTime=$(BUILD_TIME)
 VARS += GitHash=$(GIT_HASH)
 VARS += GitTag=$(GIT_TAG)
 LDFLAGS := $(addprefix -X main.,$(VARS))
