@@ -152,6 +152,7 @@ func (db *geoIP2DB) renew(s log.Sugar) error {
 	}
 	db.Lock()
 	if db.reader != nil {
+		s.Infof("Closing outdated DB")
 		db.reader.Close()
 	}
 	db.reader = reader
