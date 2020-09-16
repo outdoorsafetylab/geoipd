@@ -4,10 +4,14 @@ PBGO := $(PROTOS:.proto=.pb.go)
 EXEC := geoipd
 GOFILES := go.mod $(wildcard *.go) $(wildcard */*.go)
 
+BUILD_TIME ?= $(shell date +'%s')
+GIT_HASH ?= $(shell git rev-parse --short HEAD)
+GIT_TAG ?= $(shell git describe --tags --exact-match 2>/dev/null || echo "")
+
 VARS :=
-VARS += GitTime=$(shell git show -s --format=%ct HEAD || date +'%s')
-VARS += GitHash=$(shell git rev-parse --short HEAD || echo "${SHORT_SHA}")
-VARS += GitTag=$(shell git describe --tags --exact-match 2>/dev/null || echo "${TAG_NAME}")
+VARS += GitTime=$(BUILD_TIME)
+VARS += GitHash=$(GIT_HASH)
+VARS += GitTag=$(GIT_TAG)
 LDFLAGS := $(addprefix -X main.,$(VARS))
 
 all: $(EXEC) $(PBJS)

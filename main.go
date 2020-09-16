@@ -16,9 +16,9 @@ import (
 )
 
 var (
-	GitTime string
-	GitHash string
-	GitTag  string
+	BuildTime string
+	GitHash   string
+	GitTag    string
 )
 
 func main() {
@@ -47,7 +47,7 @@ func main() {
 	}
 	defer db.Deinit(s)
 	server := server.New(s)
-	t, _ := strconv.ParseInt(GitTime, 10, 64)
+	t, _ := strconv.ParseInt(BuildTime, 10, 64)
 	if t <= 0 {
 		t = time.Now().Unix()
 	}

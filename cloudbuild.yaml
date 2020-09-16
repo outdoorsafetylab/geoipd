@@ -1,7 +1,17 @@
 steps:
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-t', '${_IMAGE_NAME}', '-f', '.docker/Dockerfile', '.']
+  args:
+    - 'build'
+    - '--build-arg'
+    - 'GIT_HASH=$SHORT_SHA'
+    - '--build-arg'
+    - 'GIT_TAG=$TAG_NAME'
+    - '-t'
+    - 'asia.gcr.io/$PROJECT_ID/geoipd'
+    - '-f'
+    - '.docker/Dockerfile'
+    - '.'
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['push', '${_IMAGE_NAME}']
+  args: ['push', 'asia.gcr.io/$PROJECT_ID/geoipd']
 - name: 'gcr.io/cloud-builders/gcloud'
-  args: ['run', 'deploy', '${_SERVICE_NAME}', '--image', '${_IMAGE_NAME}', '--region', '${_REGION}', '--platform', 'managed']
+  args: ['run', 'deploy', '$_SERVICE_NAME', '--image', 'asia.gcr.io/$PROJECT_ID/geoipd', '--region', '$_REGION', '--platform', 'managed']

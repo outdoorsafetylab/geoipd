@@ -10,7 +10,10 @@ RUN apk update \
 RUN mkdir -p /src/geoipd/
 COPY . /src/geoipd/
 WORKDIR /src/geoipd/
-RUN make clean && make tidy && make
+
+ARG GIT_HASH
+ARG GIT_TAG
+RUN make clean && make tidy && make GIT_HASH=${GIT_HASH} GIT_TAG=${GIT_TAG}
 
 FROM alpine:3.12
 
