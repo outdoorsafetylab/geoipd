@@ -31,7 +31,7 @@ func main() {
 	if err := config.Init(*name); err != nil {
 		os.Exit(1)
 	}
-	err := log.Init(config.Get().GetBool("dev"))
+	err := log.Init()
 	if err != nil {
 		os.Exit(-1)
 	}

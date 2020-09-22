@@ -2,6 +2,7 @@ package log
 
 import (
 	"fmt"
+	"geoipd/config"
 
 	"github.com/crosstalkio/log"
 	"go.uber.org/zap"
@@ -10,9 +11,10 @@ import (
 
 var logger *zap.Logger
 
-func Init(dev bool) error {
+func Init() error {
+	cfg := config.Get()
 	var config zap.Config
-	if dev {
+	if cfg.GetBool("log.dev") {
 		config = zap.NewDevelopmentConfig()
 		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	} else {
