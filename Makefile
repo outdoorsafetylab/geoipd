@@ -1,8 +1,8 @@
-PROTOS := $(wildcard *.proto) $(wildcard */*.proto)
-PBGO := $(PROTOS:.proto=.pb.go)
+PROTOS := $(wildcard *.proto) $(wildcard */*.proto) $(wildcard */*/*.proto)
 
+PBGO := $(PROTOS:.proto=.pb.go)
+GOSRCS := go.mod $(wildcard *.go) $(wildcard */*.go) $(wildcard */*/*.go)
 EXEC := geoipd
-GOFILES := go.mod $(wildcard *.go) $(wildcard */*.go)
 
 BUILD_TIME ?= $(shell date +'%s')
 GIT_HASH ?= $(shell git rev-parse --short HEAD)
@@ -14,14 +14,16 @@ VARS += GitHash=$(GIT_HASH)
 VARS += GitTag=$(GIT_TAG)
 LDFLAGS := $(addprefix -X main.,$(VARS))
 
-all: $(EXEC) $(PBJS)
+all: $(EXEC)
 
 include .make/golangci-lint.mk
 include .make/protoc.mk
 include .make/protoc-gen-go.mk
 include .make/watcher.mk
-include .make/backend.mk
 include .make/docker.mk
+
+watch: $(PBGO) $(WEBINDEX) $(WATCHER)
+	$(realpath $(WATCHER)) -c local
 
 tidy: $(PBGO)
 	go mod tidy
@@ -32,15 +34,15 @@ lint: $(GOLANGCI_LINT)
 test:
 	go test -count=1 ./test
 
-$(EXEC): $(PBGO) $(GOFILES)
+$(EXEC): $(PBGO) $(GOSRCS)
 	go mod tidy
 	go build -ldflags="$(LDFLAGS)" -o $@
 
 clean/proto:
 	rm -f $(PBGO)
 
-clean: clean/golangci-lint clean/protoc clean/protoc-gen-go clean/watcher clean/backend clean/proto
+clean: clean/golangci-lint clean/protoc clean/protoc-gen-go clean/proto clean/watcher
 	rm -f go.sum
 	rm -f $(EXEC)
 
-.PHONY: all tidy lint clean test stress
+.PHONY: all tidy lint clean test

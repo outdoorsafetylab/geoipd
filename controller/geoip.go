@@ -88,7 +88,7 @@ func (c *GeoIPController) Country(s *rest.Session) {
 func (c *GeoIPController) getRequestIP(s *rest.Session) (string, net.IP) {
 	host := s.Var("ip", "")
 	if host == "" {
-		ip := s.RemoteAddr()
+		ip, _ := s.RemoteHost()
 		if ip != nil {
 			host = ip.String()
 		}

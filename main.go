@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"geoipd/cache"
 	"geoipd/db"
+	"geoipd/dns"
 	"geoipd/model"
 	"geoipd/server"
 	"os"
@@ -36,6 +37,10 @@ func main() {
 		os.Exit(-1)
 	}
 	s := log.GetSugar()
+	err = dns.Init(s)
+	if err != nil {
+		os.Exit(-1)
+	}
 	err = cache.Init(s)
 	if err != nil {
 		os.Exit(-1)
