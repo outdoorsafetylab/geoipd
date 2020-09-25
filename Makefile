@@ -22,16 +22,16 @@ include .make/protoc-gen-go.mk
 include .make/watcher.mk
 include .make/docker.mk
 
-watch: $(PBGO) $(WEBINDEX) $(WATCHER)
+watch: $(PBGO) $(WEBINDEX) $(WATCHER) tidy
 	$(realpath $(WATCHER)) -c local
 
-tidy: $(PBGO)
+tidy:
 	go mod tidy
 
 lint: $(GOLANGCI_LINT)
 	$(realpath $(GOLANGCI_LINT)) run
 
-test:
+test: $(PBGO)
 	go test -count=1 ./test
 
 $(EXEC): $(PBGO) $(GOSRCS)
