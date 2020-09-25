@@ -25,7 +25,7 @@ include .make/docker.mk
 watch: $(PBGO) $(WEBINDEX) $(WATCHER) tidy
 	$(realpath $(WATCHER)) -c local
 
-tidy:
+tidy: $(PBGO)
 	go mod tidy
 
 lint: $(GOLANGCI_LINT)
