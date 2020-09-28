@@ -2,7 +2,7 @@ PROTOS := $(wildcard *.proto) $(wildcard */*.proto) $(wildcard */*/*.proto)
 
 PBGO := $(PROTOS:.proto=.pb.go)
 GOSRCS := go.mod $(wildcard *.go) $(wildcard */*.go) $(wildcard */*/*.go)
-EXEC := geoipd
+EXEC := serviced
 
 BUILD_TIME ?= $(shell date +'%s')
 GIT_HASH ?= $(shell git rev-parse --short HEAD)
@@ -12,7 +12,7 @@ VARS :=
 VARS += BuildTime=$(BUILD_TIME)
 VARS += GitHash=$(GIT_HASH)
 VARS += GitTag=$(GIT_TAG)
-LDFLAGS := $(addprefix -X main.,$(VARS))
+LDFLAGS := $(addprefix -X version.,$(VARS))
 
 all: $(EXEC)
 
@@ -30,9 +30,6 @@ tidy: $(PBGO)
 
 lint: $(GOLANGCI_LINT)
 	$(realpath $(GOLANGCI_LINT)) run
-
-test: $(PBGO)
-	go test -count=1 ./test
 
 $(EXEC): $(PBGO) $(GOSRCS)
 	go mod tidy

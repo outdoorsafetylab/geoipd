@@ -1,25 +1,24 @@
 package controller
 
 import (
-	"geoipd/api"
-	"geoipd/model"
+	"service/api"
+	"service/version"
 	"time"
 
 	"github.com/crosstalkio/rest"
 )
 
-type ConfigController struct {
-	*model.Version
-}
+type ConfigController struct{}
 
 func (c *ConfigController) Get(s *rest.Session) {
+	v := version.Get()
 	res := &api.GetVersionResponse{
 		Time: &api.GetVersionResponse_Time{
-			Epoch:   c.Time.Unix(),
-			Rfc3339: c.Time.Format(time.RFC3339),
+			Epoch:   v.Time.Unix(),
+			Rfc3339: v.Time.Format(time.RFC3339),
 		},
-		Commit: c.Commit,
-		Tag:    c.Tag,
+		Commit: v.Commit,
+		Tag:    v.Tag,
 	}
 	s.Status(200, res)
 }

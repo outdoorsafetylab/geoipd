@@ -2,7 +2,7 @@ package log
 
 import (
 	"fmt"
-	"geoipd/config"
+	"service/config"
 
 	"github.com/crosstalkio/log"
 	"go.uber.org/zap"

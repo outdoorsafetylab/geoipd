@@ -1,43 +1,115 @@
 package server
 
 import (
-	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 
-	"geoipd/config"
-	"geoipd/model"
+	"service/config"
+	"service/dns"
 
-	"path/filepath"
-
+	"github.com/crosstalkio/httpd"
 	"github.com/crosstalkio/log"
-	"golang.org/x/crypto/acme/autocert"
 )
 
 type server struct {
 	log.Sugar
-	signal  chan os.Signal
-	httpErr chan error
+	signal      chan os.Signal
+	httpErr     chan error
+	redirectErr chan error
 }
 
-func New(log log.Sugar) *server {
-	s := &server{
-		Sugar:   log,
-		httpErr: make(chan error, 1),
-		signal:  make(chan os.Signal, 1),
+func New(s log.Sugar) *server {
+	server := &server{
+		Sugar:       s,
+		signal:      make(chan os.Signal, 1),
+		httpErr:     make(chan error, 1),
+		redirectErr: make(chan error, 1),
 	}
-	return s
+	return server
 }
 
-func (s *server) Run(ver *model.Version) error {
-	r := NewRouter(s, ver)
-	http.Handle("/", r)
+func (s *server) Run(root http.FileSystem) error {
+	cfg := config.Get()
+	var tls *tls.Config
+	var err error
+	cert := cfg.GetString("cert.type")
+	switch cert {
+	case "", "off", "none":
+	case "file":
+		keyFile := cfg.GetString("cert.keyfile")
+		crtFile := cfg.GetString("cert.crtfile")
+		if crtFile == "" || keyFile == "" {
+			return fmt.Errorf("Missing 'cert.keyfile' or 'cert.crtfile' config")
+		}
+		tls, err = httpd.GetCertFileConfig(s, keyFile, crtFile)
+		if err != nil {
+			return err
+		}
+	case "host":
+		host, err := dns.GetHost()
+		if err != nil {
+			return err
+		}
+		domain, err := dns.GetDomain()
+		if err != nil {
+			return err
+		}
+		email := cfg.GetString("cert.email")
+		if email == "" {
+			return fmt.Errorf("Missing 'cert.email' config")
+		}
+		cacheDir := cfg.GetString("cert.cache_dir")
+		tls, err = httpd.GetAutoHostCertConfig(s, fmt.Sprintf("%s.%s", host, domain), email, cacheDir)
+		if err != nil {
+			return err
+		}
+	case "domain":
+		domain, err := dns.GetDomain()
+		if err != nil {
+			return err
+		}
+		email := cfg.GetString("cert.email")
+		if email == "" {
+			return fmt.Errorf("Missing 'cert.email' config")
+		}
+		cacheDir := cfg.GetString("cert.cache_dir")
+		tls, err = httpd.GetAutoDomainCertConfig(s, domain, email, cacheDir)
+		if err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("Unexpected 'cert.type' config: %s", cert)
+	}
+	r := NewRouter(s, root)
 	go func() {
-		s.httpErr <- s.bindHTTP()
+		s.httpErr <- httpd.BindHTTP(s, cfg.GetInt("port"), r, tls)
+	}()
+	go func() {
+		port := cfg.GetInt("redirect.port")
+		if port <= 0 {
+			return
+		}
+		code := cfg.GetInt("redirect.code")
+		if code <= 0 {
+			code = 301
+		}
+		scheme := cfg.GetString("redirect.scheme")
+		if scheme == "" {
+			scheme = "https"
+		}
+		s.redirectErr <- httpd.BindHTTP(s, port, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			host, _, err := net.SplitHostPort(r.Host)
+			if err != nil {
+				host = r.Host
+			}
+			url := fmt.Sprintf("%s://%s:%d%s", scheme, host, cfg.GetInt("port"), r.RequestURI)
+			s.Debugf("Redirecting %d: %s => %s", code, r.URL, url)
+			http.Redirect(w, r, url, code)
+		}), nil)
 	}()
 	signal.Notify(s.signal, os.Interrupt)
 	for {
@@ -47,83 +119,14 @@ func (s *server) Run(ver *model.Version) error {
 				s.Errorf("HTTP error: %s", err.Error())
 				return err
 			}
+		case err := <-s.redirectErr:
+			if err != nil {
+				s.Errorf("Redirect error: %s", err.Error())
+				return err
+			}
 		case <-s.signal:
 			s.Infof("Interrupted")
 			return nil
 		}
-	}
-}
-
-func (s *server) bindHTTP() error {
-	cfg := config.Get()
-	port := cfg.GetInt("port")
-	addr := fmt.Sprintf(":%d", port)
-	cert := cfg.GetString("cert.type")
-	switch cert {
-	case "", "off", "none":
-		s.Infof("Listening HTTP on port %d", port)
-		return http.ListenAndServe(addr, nil)
-	case "file":
-		crtFile := cfg.GetString("cert.crtfile")
-		keyFile := cfg.GetString("cert.keyfile")
-		if crtFile == "" || keyFile == "" {
-			return fmt.Errorf("Missing 'cert.crtfile' or 'cert.keyfile' config")
-		}
-		s.Infof("Listening HTTPS with '%s' and '%s' on port %d", crtFile, keyFile, port)
-		return http.ListenAndServeTLS(addr, crtFile, keyFile, nil)
-	case "auto":
-		m := &autocert.Manager{
-			Prompt: autocert.AcceptTOS,
-			Email:  cfg.GetString("cert.email"),
-		}
-		cacheDir := cfg.GetString("cert.cache_dir")
-		if cacheDir != "" {
-			dir, err := filepath.Abs(cacheDir)
-			if err != nil {
-				return err
-			}
-			m.Cache = autocert.DirCache(dir)
-		}
-		hostname := cfg.GetString("cert.host")
-		var err error
-		if hostname == "" {
-			hostname, err = os.Hostname()
-			if err != nil {
-				return err
-			}
-		}
-		domain := cfg.GetString("cert.domain")
-		if domain == "" {
-			m.HostPolicy = func(_ context.Context, host string) error {
-				if host != hostname {
-					return fmt.Errorf("Hostname mismatch: expect=%q, was=%q", hostname, host)
-				}
-				return nil
-			}
-		} else {
-			m.HostPolicy = func(c context.Context, host string) error {
-				if !strings.HasSuffix(host, domain) {
-					s.Warningf("Not expected domain: %s", host)
-					return fmt.Errorf("Not allowed")
-				}
-				return nil
-			}
-		}
-		config := m.TLSConfig()
-		getCert := config.GetCertificate
-		config.GetCertificate = func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			if hello.ServerName == "" {
-				hello.ServerName = hostname
-			}
-			return getCert(hello)
-		}
-		srv := &http.Server{
-			Addr:      addr,
-			TLSConfig: config,
-		}
-		s.Infof("Listening HTTPS with auto-certs on port %d", port)
-		return srv.ListenAndServeTLS("", "")
-	default:
-		return fmt.Errorf("Unexpected 'cert.type' config: %s", cert)
 	}
 }

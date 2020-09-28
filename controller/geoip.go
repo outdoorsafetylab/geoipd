@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"geoipd/cache"
-	"geoipd/db"
 	"net"
+	"service/cache"
+	"service/db"
 	"strings"
 
 	"github.com/crosstalkio/rest"

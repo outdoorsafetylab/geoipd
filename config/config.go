@@ -35,7 +35,7 @@ func getConfig(name string) (*viper.Viper, error) {
 	cfg.SetConfigName(name)
 	cfg.AddConfigPath("config/")
 	cfg.AddConfigPath("../config/")
-	cfg.AddConfigPath("/etc/geoipd/")
+	cfg.AddConfigPath("/etc/serviced/")
 	err := cfg.ReadInConfig()
 	if err != nil {
 		return nil, err

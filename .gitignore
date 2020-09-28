@@ -1,6 +1,6 @@
 /.tool
 /go.sum
-/geoipd
+/serviced
 *.pb.go
 *.mmdb
 secret.yaml

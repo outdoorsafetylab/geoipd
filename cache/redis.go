@@ -2,7 +2,7 @@ package cache
 
 import (
 	"fmt"
-	"geoipd/config"
+	"service/config"
 	"time"
 
 	"github.com/crosstalkio/log"

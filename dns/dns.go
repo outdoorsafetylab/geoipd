@@ -1,52 +1,40 @@
 package dns
 
 import (
-	"fmt"
+	"errors"
 	"net"
 	"time"
 
-	"geoipd/config"
+	"service/config"
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/crosstalkio/godaddy"
 	"github.com/crosstalkio/log"
 )
 
-var internalIP net.IP
-var externalIP net.IP
-
 func Init(s log.Sugar) error {
-	var err error
-	internalIP, err = detectInternalIP(s)
-	if err != nil {
-		return err
-	}
-	externalIP, err = detectExternalIP(s)
-	if err != nil {
-		return err
-	}
 	cfg := config.Get()
-	host := cfg.GetString("dns.host")
-	if host == "" && metadata.OnGCE() {
-		host, err = metadata.InstanceName()
-		if err == nil {
-			cfg.Set("dns.host", host)
-			s.Infof("Using GCE instance name for 'dns.host': %s", host)
-		}
-	}
-	domain := cfg.GetString("dns.domain")
-	if domain == "" {
-		return nil
-	}
 	ttl := cfg.GetInt("dns.ttl")
 	if ttl <= 0 {
-		return fmt.Errorf("Invalid or missing 'dns.ttl' config: %d", ttl)
+		return nil
+	}
+	host, err := GetHost()
+	if err != nil {
+		return err
+	}
+	domain, err := GetDomain()
+	if err != nil {
+		return err
+	}
+	ip, err := detectExternalIP(s)
+	if err != nil {
+		return err
 	}
 	kind := "A"
-	if externalIP.To4() == nil {
+	if ip.To4() == nil {
 		kind = "AAAA"
 	}
-	addr := externalIP.String()
+	addr := ip.String()
 	s.Infof("Updating DNS: %s.%s => %s (TTL: %d)", host, domain, addr, ttl)
 	client := godaddy.NewClient(cfg.GetString("godaddy.url"), cfg.GetString("godaddy.key"), cfg.GetString("godaddy.secret"), time.Second*time.Duration(cfg.GetInt64("godaddy.timeout")))
 	err = client.PutRecord(domain, kind, host, addr, ttl)
@@ -57,10 +45,34 @@ func Init(s log.Sugar) error {
 	return nil
 }
 
-func GetInternalIP() net.IP {
-	return internalIP
+func GetInternalIP(s log.Sugar) (net.IP, error) {
+	return detectInternalIP(s)
 }
 
-func GetExternalIP() net.IP {
-	return externalIP
+func GetExternalIP(s log.Sugar) (net.IP, error) {
+	return detectExternalIP(s)
+}
+
+func GetHost() (string, error) {
+	cfg := config.Get()
+	host := cfg.GetString("dns.host")
+	if host == "" {
+		if metadata.OnGCE() {
+			host, err := metadata.InstanceName()
+			if err == nil {
+				return host, nil
+			}
+		}
+		return "", errors.New("Failed to resolve host")
+	}
+	return host, nil
+}
+
+func GetDomain() (string, error) {
+	cfg := config.Get()
+	domain := cfg.GetString("dns.domain")
+	if domain == "" {
+		return "", errors.New("Failed to resolve domain")
+	}
+	return domain, nil
 }

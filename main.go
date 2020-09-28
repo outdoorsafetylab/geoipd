@@ -3,23 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
-	"geoipd/cache"
-	"geoipd/db"
-	"geoipd/dns"
-	"geoipd/model"
-	"geoipd/server"
 	"os"
-	"strconv"
-	"time"
+	"service/cache"
+	"service/db"
+	"service/dns"
+	"service/server"
 
-	"geoipd/config"
-	"geoipd/log"
-)
-
-var (
-	BuildTime string
-	GitHash   string
-	GitTag    string
+	"service/config"
+	"service/log"
 )
 
 func main() {
@@ -52,16 +43,7 @@ func main() {
 	}
 	defer db.Deinit(s)
 	server := server.New(s)
-	t, _ := strconv.ParseInt(BuildTime, 10, 64)
-	if t <= 0 {
-		t = time.Now().Unix()
-	}
-	ver := &model.Version{
-		Time:   time.Unix(t, 0),
-		Commit: GitHash,
-		Tag:    GitTag,
-	}
-	err = server.Run(ver)
+	err = server.Run(nil)
 	if err == nil {
 		os.Exit(0)
 	} else {
