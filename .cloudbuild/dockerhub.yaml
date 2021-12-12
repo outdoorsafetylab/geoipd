@@ -1,5 +1,13 @@
 steps:
 - name: gcr.io/cloud-builders/docker
+  args: 
+  - login
+  - --username=$$USERNAME
+  - --password=$$PASSWORD
+  secretEnv:
+    - USERNAME
+    - PASSWORD
+- name: gcr.io/cloud-builders/docker
   args:
   - build
   - --build-arg
@@ -11,14 +19,6 @@ steps:
   - -f
   - .docker/Dockerfile
   - .
-- name: gcr.io/cloud-builders/docker
-  args: 
-  - login
-  - --username=$$USERNAME
-  - --password=$$PASSWORD
-  secretEnv:
-    - USERNAME
-    - PASSWORD
 - name: gcr.io/cloud-builders/docker
   args: 
   - push
