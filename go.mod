@@ -1,6 +1,6 @@
 module service
 
-go 1.14
+go 1.15
 
 require (
 	github.com/crosstalkio/httpd v0.0.0-20200928104022-438614648a8c
