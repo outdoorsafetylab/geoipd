@@ -1,0 +1,31 @@
+steps:
+- name: gcr.io/cloud-builders/docker
+  args:
+  - build
+  - --build-arg
+  - GIT_HASH=$SHORT_SHA
+  - --build-arg
+  - GIT_TAG=$TAG_NAME
+  - -t
+  - outdoorsafetylab/geoipd
+  - -f
+  - .docker/Dockerfile
+  - .
+- name: gcr.io/cloud-builders/docker
+  args: 
+  - login
+  - --username=$USERNAME
+  - --password=$PASSWORD
+  secretEnv:
+    - USERNAME
+    - PASSWORD
+- name: gcr.io/cloud-builders/docker
+  args: 
+  - push
+  - outdoorsafetylab/geoipd
+availableSecrets:
+   secretManager:
+   - versionName: projects/$PROJECT_ID/secrets/dockerhub_username/versions/latest
+     env: USERNAME
+   - versionName: projects/$PROJECT_ID/secrets/dockerhub_access_token/versions/latest
+     env: PASSWORD
