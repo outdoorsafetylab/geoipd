@@ -14,8 +14,8 @@ steps:
 - name: gcr.io/cloud-builders/docker
   args: 
   - login
-  - --username=$USERNAME
-  - --password=$PASSWORD
+  - --username=$$USERNAME
+  - --password=$$PASSWORD
   secretEnv:
     - USERNAME
     - PASSWORD
