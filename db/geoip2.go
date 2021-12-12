@@ -214,7 +214,7 @@ func (db *geoIP2DB) download(s log.Sugar) (string, error) {
 					return "", err
 				}
 				defer outfile.Close()
-				s.Infof("Getting DB: %s => %d bytes", filename, header.Size)
+				s.Infof("Downloading DB: %s => %d bytes", filename, header.Size)
 				_, err = io.CopyN(outfile, tr, header.Size)
 				if err != nil {
 					s.Errorf("Failed to copy tar stream: %s", err.Error())
