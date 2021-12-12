@@ -27,7 +27,10 @@ steps:
   args:
   - push
   - outdoorsafetylab/geoipd
-  - --all-tags
+- name: gcr.io/cloud-builders/docker
+  args:
+  - push
+  - outdoorsafetylab/geoipd:$TAG_NAME
 availableSecrets:
    secretManager:
    - versionName: projects/outdoorsafetylab/secrets/dockerhub_username/versions/latest
