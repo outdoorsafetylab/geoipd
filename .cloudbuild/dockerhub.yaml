@@ -5,7 +5,7 @@ steps:
   args: [ '-c', "gcloud secrets versions access latest --secret=dockerhub_access_token --format='get(payload.data)' | tr '_-' '/+' | base64 -d > /tmp/dockerhub_password" ]
 - name: gcr.io/cloud-builders/docker
   entrypoint: 'bash'
-  args: [ '-c', 'docker login --username=cedricshih --password-stdin < /tmp/dockerhub_password']
+  args: [ '-c', 'docker login --username=$$USERNAME --password-stdin < /tmp/dockerhub_password']
 - name: gcr.io/cloud-builders/docker
   args:
   - build
@@ -26,5 +26,3 @@ availableSecrets:
    secretManager:
    - versionName: projects/outdoorsafetylab/secrets/dockerhub_username/versions/latest
      env: USERNAME
-   - versionName: projects/outdoorsafetylab/secrets/dockerhub_access_token/versions/latest
-     env: PASSWORD
