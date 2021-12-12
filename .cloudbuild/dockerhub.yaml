@@ -1,5 +1,4 @@
 steps:
-steps:
 - name: gcr.io/cloud-builders/gcloud
   entrypoint: 'bash'
   args: [ '-c', "gcloud secrets versions access latest --secret=dockerhub_access_token --format='get(payload.data)' | tr '_-' '/+' | base64 -d > dockerhub_password" ]
