@@ -2,7 +2,7 @@ log:
   dev: true
 geoip2:
   edition: GeoLite2-Country
-  renew: 10s
+  renew: 60s
 port: 8080
 endpoint: /v1
 redis:

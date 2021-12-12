@@ -6,7 +6,6 @@ import (
 	"os"
 	"service/cache"
 	"service/db"
-	"service/dns"
 	"service/server"
 
 	"service/config"
@@ -28,10 +27,6 @@ func main() {
 		os.Exit(-1)
 	}
 	s := log.GetSugar()
-	err = dns.Init(s)
-	if err != nil {
-		os.Exit(-1)
-	}
 	err = cache.Init(s)
 	if err != nil {
 		os.Exit(-1)
