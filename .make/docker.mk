@@ -12,6 +12,8 @@ GEOIP2_LICENSE_KEY ?=
 docker/build:
 	docker build --network=host --force-rm \
 		$(if $(call eq,$(no-cache),yes),--no-cache --pull,) \
+		--build-arg GIT_HASH=$(GIT_HASH) \
+		--build-arg GIT_TAG=$(GIT_TAG) \
 		-t $(IMAGE_NAME) \
 		-f .docker/Dockerfile \
 		.
@@ -24,8 +26,7 @@ docker/build:
 docker/run:
 	docker run -it --rm \
 		--name=$(CODENAME) \
-		--network=host \
-		-e PORT=8080 \
+		-p 8080:8080 \
 		-e GEOIP2_LICENSE_KEY=$(GEOIP2_LICENSE_KEY) \
 		$(IMAGE_NAME)
 
