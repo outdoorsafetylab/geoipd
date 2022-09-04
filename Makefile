@@ -14,8 +14,8 @@ LDFLAGS := $(addprefix -X service/version.,$(VARS))
 
 all: $(EXEC)
 
-include .make/golangci-lint.mk
-include .make/docker.mk
+include scripts/golangci-lint.mk
+include scripts/docker.mk
 
 serve:
 	go run . serve
@@ -23,13 +23,13 @@ serve:
 watch: # To install 'nodemon': npm install -g nodemon
 	nodemon -e go --signal SIGTERM --exec 'make serve'
 
-tidy: $(PBGO)
+tidy:
 	go mod tidy
 
 lint: $(GOLANGCI_LINT)
 	$(realpath $(GOLANGCI_LINT)) run
 
-$(EXEC): $(PBGO) $(GOSRCS)
+$(EXEC): $(GOSRCS)
 	go mod tidy
 	go build -ldflags="$(LDFLAGS)" -o $@
 

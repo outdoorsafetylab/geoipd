@@ -26,8 +26,8 @@ RUN apk update \
     && rm -rf /var/cache/apk/* /tmp/*
 
 COPY --from=builder /src/geoip /usr/sbin/
-COPY config/docker.yaml /
-COPY entrypoint.sh /
+COPY build/docker.yaml /
+COPY build/entrypoint.sh /
 
 ENV GEOIP2_LICENSE_KEY=
 

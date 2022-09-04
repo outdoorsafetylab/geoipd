@@ -15,7 +15,7 @@ docker/build:
 		--build-arg GIT_HASH=$(GIT_HASH) \
 		--build-arg GIT_TAG=$(GIT_TAG) \
 		-t $(IMAGE_NAME) \
-		-f Dockerfile \
+		-f build/Dockerfile \
 		.
 
 # Run docker image.
