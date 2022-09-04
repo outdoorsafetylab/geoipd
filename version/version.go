@@ -1,10 +1,9 @@
 package version
 
 import (
+	"service/model"
 	"strconv"
 	"time"
-
-	"service/model"
 )
 
 var (
@@ -14,13 +13,13 @@ var (
 )
 
 func Get() *model.Version {
-	t, _ := strconv.ParseInt(BuildTime, 10, 64)
-	if t <= 0 {
-		t = time.Now().Unix()
-	}
-	return &model.Version{
-		Time:   time.Unix(t, 0),
+	version := &model.Version{
 		Commit: GitHash,
 		Tag:    GitTag,
 	}
+	v, err := strconv.ParseInt(BuildTime, 10, 64)
+	if err == nil {
+		version.Time = time.Unix(v, 0)
+	}
+	return version
 }

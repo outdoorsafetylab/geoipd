@@ -6,27 +6,24 @@ import (
 	"service/controller"
 	"service/middleware"
 
-	"github.com/crosstalkio/log"
-	"github.com/crosstalkio/rest"
 	"github.com/gorilla/mux"
 )
 
-func NewRouter(s log.Logger, root http.FileSystem) *mux.Router {
+func NewRouter(root http.FileSystem) *mux.Router {
 	cfg := config.Get()
-	rest := rest.NewServer(s)
-	rest.Use(middleware.Dump)
-	rest.Use(middleware.NoCache)
 
 	r := mux.NewRouter()
 
 	endpoint := r.PathPrefix(cfg.GetString("endpoint")).Subrouter()
+	endpoint.Use(middleware.Dump)
+	endpoint.Use(middleware.NoCache)
 
 	config := &controller.ConfigController{}
-	endpoint.Methods("GET").Path("/version").Handler(rest.HandlerFunc(config.Get))
+	endpoint.HandleFunc("/version", config.GetVersion).Methods("GET")
 
 	geoip := &controller.GeoIPController{}
-	endpoint.Methods("GET").Path("/city").Handler(rest.HandlerFunc(geoip.City))
-	endpoint.Methods("GET").Path("/country").Handler(rest.HandlerFunc(geoip.Country))
+	endpoint.HandleFunc("/city", geoip.City).Methods("GET")
+	endpoint.HandleFunc("/country", geoip.Country).Methods("GET")
 
 	if root != nil {
 		r.NotFoundHandler = http.FileServer(root)

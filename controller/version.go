@@ -1,24 +1,12 @@
 package controller
 
 import (
-	"service/api"
+	"net/http"
 	"service/version"
-	"time"
-
-	"github.com/crosstalkio/rest"
 )
 
 type ConfigController struct{}
 
-func (c *ConfigController) Get(s *rest.Session) {
-	v := version.Get()
-	res := &api.GetVersionResponse{
-		Time: &api.GetVersionResponse_Time{
-			Epoch:   v.Time.Unix(),
-			Rfc3339: v.Time.Format(time.RFC3339),
-		},
-		Commit: v.Commit,
-		Tag:    v.Tag,
-	}
-	s.Status(200, res)
+func (c *ConfigController) GetVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, r, version.Get())
 }

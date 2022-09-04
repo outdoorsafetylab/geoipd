@@ -1,112 +1,89 @@
 package controller
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"service/cache"
 	"service/db"
-	"strings"
-
-	"github.com/crosstalkio/rest"
+	"service/log"
 )
 
 type GeoIPController struct {
 }
 
-func (c *GeoIPController) City(s *rest.Session) {
-	host, ip := c.getRequestIP(s)
+func (c *GeoIPController) City(w http.ResponseWriter, r *http.Request) {
+	remoteAddr := stringVar(r, "ip", "")
+	if remoteAddr == "" {
+		remoteAddr = getRemoteAddress(r)
+	}
+	ip := net.ParseIP(remoteAddr)
 	if ip == nil {
-		s.Statusf(400, "Invalid IP address: %s", host)
+		http.Error(w, fmt.Sprintf("Invalid IP address: %s", remoteAddr), 400)
 		return
 	}
-	cacheKey := fmt.Sprintf("city:%s", host)
-	data, err := cache.Get(cacheKey)
-	if err != nil {
-		s.Status(500, err)
+	cacheKey := fmt.Sprintf("city:%s", remoteAddr)
+	var city db.City
+	err := cache.Unmarshal(cacheKey, &city)
+	if err == nil {
+		log.Infof("Hit city location cache: %s", remoteAddr)
+		writeJSON(w, r, &city)
 		return
 	}
-	if data != nil {
-		s.Infof("Hit city location cache: %s", host)
+	if err != cache.Miss {
+		http.Error(w, err.Error(), 500)
+		return
 	} else {
-		s.Infof("Querying city location: %s", host)
+		log.Infof("Querying city location: %s", remoteAddr)
 		city, err := db.QueryCity(ip)
 		if err != nil {
-			s.Status(500, err)
+			http.Error(w, err.Error(), 500)
 			return
 		}
-		data, err = json.Marshal(city)
+		err = cache.Marshal(cacheKey, city)
 		if err != nil {
-			s.Status(500, err)
+			http.Error(w, err.Error(), 500)
 			return
 		}
-		err = cache.Set(cacheKey, data)
-		if err != nil {
-			s.Status(500, err)
-			return
-		}
+		writeJSON(w, r, city)
+		return
 	}
-	c.flush(s, data)
 }
 
-func (c *GeoIPController) Country(s *rest.Session) {
-	host, ip := c.getRequestIP(s)
+func (c *GeoIPController) Country(w http.ResponseWriter, r *http.Request) {
+	remoteAddr := stringVar(r, "ip", "")
+	if remoteAddr == "" {
+		remoteAddr = getRemoteAddress(r)
+	}
+	ip := net.ParseIP(remoteAddr)
 	if ip == nil {
-		s.Statusf(400, "Invalid IP address: %s", host)
+		http.Error(w, fmt.Sprintf("Invalid IP address: %s", remoteAddr), 400)
 		return
 	}
-	cacheKey := fmt.Sprintf("country:%s", host)
-	data, err := cache.Get(cacheKey)
-	if err != nil {
-		s.Status(500, err)
+	cacheKey := fmt.Sprintf("country:%s", remoteAddr)
+	var country db.Country
+	err := cache.Unmarshal(cacheKey, &country)
+	if err == nil {
+		log.Infof("Hit country location cache: %s", remoteAddr)
+		writeJSON(w, r, &country)
 		return
 	}
-	if data != nil {
-		s.Infof("Hit country location cache: %s", host)
+	if err != cache.Miss {
+		http.Error(w, err.Error(), 500)
+		return
 	} else {
-		s.Infof("Querying country location: %s", host)
+		log.Infof("Querying country location: %s", remoteAddr)
 		country, err := db.QueryCountry(ip)
 		if err != nil {
-			s.Status(500, err)
+			http.Error(w, err.Error(), 500)
 			return
 		}
-		data, err = json.Marshal(country)
+		err = cache.Marshal(cacheKey, country)
 		if err != nil {
-			s.Status(500, err)
+			http.Error(w, err.Error(), 500)
 			return
 		}
-		err = cache.Set(cacheKey, data)
-		if err != nil {
-			s.Status(500, err)
-			return
-		}
+		writeJSON(w, r, country)
+		return
 	}
-	c.flush(s, data)
-}
-
-func (c *GeoIPController) getRequestIP(s *rest.Session) (string, net.IP) {
-	host := s.Var("ip", "")
-	if host == "" {
-		ip, _ := s.RemoteHost()
-		if ip != nil {
-			host = ip.String()
-		}
-		return host, ip
-	}
-	return host, net.ParseIP(host)
-}
-
-func (c *GeoIPController) flush(s *rest.Session, data []byte) {
-	if strings.Contains(s.RequestHeader().Get("User-Agent"), "Mozilla") {
-		var dst bytes.Buffer
-		err := json.Indent(&dst, data, "", "  ")
-		if err != nil {
-			s.Status(500, err)
-			return
-		}
-		data = dst.Bytes()
-	}
-	s.ResponseHeader().Set("Content-Type", "application/json")
-	_, _ = s.ResponseWriter.Write(data)
 }

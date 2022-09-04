@@ -16,7 +16,7 @@ docker run -it --rm \
 It will take some time to download the `GeoLite2-City` DB, please wait until it finishes. You can start testing it after seeing a log message `Serving HTTP: [::]:8080`:
 
 ```shell
-curl "http://localhost:8080/v1/city
+curl "http://localhost:8080/v1/city"
 ```
 
 It will print a useless result since the server detected a bridged IP address inside docker. Use the following command to simulate the scenario after deploying it:

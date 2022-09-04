@@ -16,7 +16,7 @@ steps:
   - -t
   - outdoorsafetylab/geoipd
   - -f
-  - .docker/Dockerfile
+  - build/Dockerfile
   - .
 - name: gcr.io/cloud-builders/docker
   args:

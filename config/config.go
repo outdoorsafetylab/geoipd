@@ -33,9 +33,9 @@ func getConfig(name string) (*viper.Viper, error) {
 	cfg.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	cfg.SetConfigType("yaml")
 	cfg.SetConfigName(name)
+	cfg.AddConfigPath("./")
 	cfg.AddConfigPath("config/")
 	cfg.AddConfigPath("../config/")
-	cfg.AddConfigPath("/etc/serviced/")
 	err := cfg.ReadInConfig()
 	if err != nil {
 		return nil, err

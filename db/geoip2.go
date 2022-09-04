@@ -6,16 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
-	"service/config"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/crosstalkio/log"
+	"service/config"
+	"service/log"
+
 	"github.com/oschwald/geoip2-golang"
 )
 
@@ -23,16 +23,16 @@ var db *geoIP2DB
 var ticker *time.Ticker
 var done chan bool
 
-func Init(s log.Sugar) error {
+func Init() error {
 	cfg := config.Get()
 	key := cfg.GetString("geoip2.license_key")
 	if key == "" {
-		s.Errorf("Please specify 'geoip2.license_key' in YAML config or set GEOIP2_LICENSE_KEY environment variable in order to download DB.")
+		log.Errorf("Please specify 'geoip2.license_key' in YAML config or set GEOIP2_LICENSE_KEY environment variable in order to download DB.")
 		return errors.New("Missing license key")
 	}
 	edition := cfg.GetString("geoip2.edition")
 	db = newGeoIP2DB(key, edition)
-	err := db.renew(s)
+	err := db.renew()
 	if err != nil {
 		return err
 	}
@@ -40,10 +40,10 @@ func Init(s log.Sugar) error {
 	if renew != "" {
 		du, err := time.ParseDuration(renew)
 		if err != nil {
-			s.Errorf("Invalid renew duration: %s", renew)
+			log.Errorf("Invalid renew duration: %s", renew)
 			return err
 		}
-		s.Infof("Scheduling DB renew every %s", renew)
+		log.Infof("Scheduling DB renew every %s", renew)
 		ticker = time.NewTicker(du)
 		done = make(chan bool)
 		go func() {
@@ -52,8 +52,8 @@ func Init(s log.Sugar) error {
 				case <-done:
 					return
 				case t := <-ticker.C:
-					s.Infof("Renewing DB at %s", t.String())
-					_ = db.renew(s)
+					log.Infof("Renewing DB at %s", t.String())
+					_ = db.renew()
 				}
 			}
 		}()
@@ -61,7 +61,7 @@ func Init(s log.Sugar) error {
 	return nil
 }
 
-func Deinit(s log.Sugar) {
+func Deinit() {
 	if ticker != nil {
 		ticker.Stop()
 		done <- true
@@ -136,40 +136,40 @@ func newGeoIP2DB(licenseKey, edition string) *geoIP2DB {
 	}
 }
 
-func (db *geoIP2DB) renew(s log.Sugar) error {
-	path, err := db.download(s)
+func (db *geoIP2DB) renew() error {
+	path, err := db.download()
 	if err != nil {
 		return err
 	}
 	if path == "" {
 		return nil
 	}
-	s.Infof("Opening DB: %s", path)
+	log.Infof("Opening DB: %s", path)
 	reader, err := geoip2.Open(path)
 	if err != nil {
-		s.Fatalf("Failed to open GeoIP2: %s", err.Error())
+		log.Errorf("Failed to open GeoIP2: %s", err.Error())
 		return err
 	}
 	db.Lock()
 	if db.reader != nil {
-		s.Infof("Closing outdated DB")
+		log.Infof("Closing outdated DB")
 		db.reader.Close()
 	}
 	db.reader = reader
 	db.Unlock()
 	if db.path != "" {
-		s.Infof("Deleting outdated DB: %s", db.path)
+		log.Infof("Deleting outdated DB: %s", db.path)
 		os.Remove(db.path)
 	}
 	db.path = path
 	return nil
 }
 
-func (db *geoIP2DB) download(s log.Sugar) (string, error) {
+func (db *geoIP2DB) download() (string, error) {
 	url := fmt.Sprintf("https://download.maxmind.com/app/geoip_download?edition_id=%s&license_key=%s&suffix=tar.gz", db.edition, db.licenseKey)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		s.Errorf("Failed to create request: %s", err.Error())
+		log.Errorf("Failed to create request: %s", err.Error())
 		return "", err
 	}
 	if db.etag != "" {
@@ -183,15 +183,15 @@ func (db *geoIP2DB) download(s log.Sugar) (string, error) {
 	switch res.StatusCode {
 	case 200:
 	case 304:
-		s.Infof("Not modified: %s => %s", db.edition, db.etag)
+		log.Infof("Not modified: %s => %s", db.edition, db.etag)
 		return "", nil
 	default:
-		s.Errorf("Failed to download %s: %s", db.edition, res.Status)
+		log.Errorf("Failed to download %s: %s", db.edition, res.Status)
 		return "", errors.New(res.Status)
 	}
 	gr, err := gzip.NewReader(res.Body)
 	if err != nil {
-		s.Errorf("Failed to read gzip stream: %s", err.Error())
+		log.Errorf("Failed to read gzip stream: %s", err.Error())
 		return "", err
 	}
 	filename := fmt.Sprintf("%s.mmdb", db.edition)
@@ -201,40 +201,40 @@ func (db *geoIP2DB) download(s log.Sugar) (string, error) {
 		if err == io.EOF {
 			break
 		} else if err != nil {
-			s.Errorf("Failed to iterate tar stream: %s", err.Error())
+			log.Errorf("Failed to iterate tar stream: %s", err.Error())
 			return "", err
 		}
 		switch header.Typeflag {
 		case tar.TypeDir:
 		case tar.TypeReg:
 			if strings.HasSuffix(header.Name, filename) {
-				outfile, err := ioutil.TempFile("", db.edition)
+				outfile, err := os.CreateTemp("", db.edition)
 				if err != nil {
-					s.Errorf("Failed to create temp file: %s", err.Error())
+					log.Errorf("Failed to create temp file: %s", err.Error())
 					return "", err
 				}
 				defer outfile.Close()
-				s.Infof("Downloading DB: %s => %d bytes", filename, header.Size)
+				log.Infof("Downloading DB: %s => %d bytes", filename, header.Size)
 				_, err = io.CopyN(outfile, tr, header.Size)
 				if err != nil {
-					s.Errorf("Failed to copy tar stream: %s", err.Error())
+					log.Errorf("Failed to copy tar stream: %s", err.Error())
 					return "", err
 				}
 				db.etag = res.Header.Get("Etag")
 				db.modTime = header.ModTime
-				s.Infof("Updating etag: %s => %s", filename, db.etag)
+				log.Infof("Updating etag: %s => %s", filename, db.etag)
 				return outfile.Name(), nil
 			} else {
-				_, err := io.CopyN(ioutil.Discard, tr, header.Size)
+				_, err := io.CopyN(io.Discard, tr, header.Size)
 				if err != nil {
-					s.Errorf("Failed to drain tar stream: %s", err.Error())
+					log.Errorf("Failed to drain tar stream: %s", err.Error())
 					return "", err
 				}
 			}
 		default:
-			s.Warningf("Unknown type in tar stream: %s in %s", header.Typeflag, header.Name)
+			log.Warnf("Unknown type in tar stream: %v in %s", header.Typeflag, header.Name)
 		}
 	}
-	s.Errorf("Not found: %s", filename)
+	log.Errorf("Not found: %s", filename)
 	return "", fmt.Errorf("Not found: %s", filename)
 }
