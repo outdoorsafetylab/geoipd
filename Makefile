@@ -1,9 +1,6 @@
-PROTOS := $(wildcard *.proto) $(wildcard */*.proto) $(wildcard */*/*.proto)
-
-PBGO := $(PROTOS:.proto=.pb.go)
 GOSRCS := go.mod $(wildcard *.go) $(wildcard */*.go) $(wildcard */*/*.go)
 
-EXEC := serviced
+EXEC := geoip
 
 BUILD_TIME ?= $(shell date +'%s')
 GIT_HASH ?= $(shell git rev-parse --short HEAD)
@@ -13,18 +10,18 @@ VARS :=
 VARS += BuildTime=$(BUILD_TIME)
 VARS += GitHash=$(GIT_HASH)
 VARS += GitTag=$(GIT_TAG)
-LDFLAGS := $(addprefix -X version.,$(VARS))
+LDFLAGS := $(addprefix -X service/version.,$(VARS))
 
 all: $(EXEC)
 
 include .make/golangci-lint.mk
-include .make/protoc.mk
-include .make/protoc-gen-go.mk
-include .make/watcher.mk
 include .make/docker.mk
 
-watch: $(PBGO) $(WEBINDEX) $(WATCHER) tidy
-	$(realpath $(WATCHER)) -c local
+serve:
+	go run . serve
+
+watch: # To install 'nodemon': npm install -g nodemon
+	nodemon -e go --signal SIGTERM --exec 'make serve'
 
 tidy: $(PBGO)
 	go mod tidy
@@ -36,10 +33,7 @@ $(EXEC): $(PBGO) $(GOSRCS)
 	go mod tidy
 	go build -ldflags="$(LDFLAGS)" -o $@
 
-clean/proto:
-	rm -f $(PBGO)
-
-clean: clean/golangci-lint clean/protoc clean/protoc-gen-go clean/proto clean/watcher
+clean: clean/golangci-lint
 	rm -f go.sum
 	rm -f $(EXEC)
 

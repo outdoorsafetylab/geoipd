@@ -2,9 +2,10 @@ package log
 
 import (
 	"fmt"
+
 	"service/config"
 
-	"github.com/crosstalkio/log"
+	"github.com/blendle/zapdriver"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -18,8 +19,11 @@ func Init() error {
 		config = zap.NewDevelopmentConfig()
 		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	} else {
-		config = zap.NewProductionConfig()
+		config = zapdriver.NewProductionConfig()
 	}
+	config.DisableCaller = true
+	config.DisableStacktrace = true
+	config.Level.SetLevel(zap.DebugLevel)
 	var err error
 	logger, err = config.Build()
 	if err != nil {
@@ -28,35 +32,54 @@ func Init() error {
 	return nil
 }
 
-func GetLogger() *zap.Logger {
+func Logger() *zap.Logger {
 	return logger
 }
 
-func GetSugar() log.Sugar {
-	return log.NewSugar(log.NewLogger(write))
+type Level int
+
+const (
+	Debug Level = iota
+	Info
+	Warning
+	Error
+	Fatal
+)
+
+func Debugf(fmtstr string, args ...interface{}) {
+	Write(Debug, fmt.Sprintf(fmtstr, args...))
 }
 
-func write(lv log.Level, payload interface{}) {
+func Infof(fmtstr string, args ...interface{}) {
+	Write(Info, fmt.Sprintf(fmtstr, args...))
+}
+
+func Warningf(fmtstr string, args ...interface{}) {
+	Write(Warning, fmt.Sprintf(fmtstr, args...))
+}
+
+func Warnf(fmtstr string, args ...interface{}) {
+	Write(Warning, fmt.Sprintf(fmtstr, args...))
+}
+
+func Errorf(fmtstr string, args ...interface{}) {
+	Write(Error, fmt.Sprintf(fmtstr, args...))
+}
+
+func Write(lv Level, msg string, fields ...zap.Field) {
 	var writer func(string, ...zap.Field)
-	logger := logger.WithOptions(zap.AddCallerSkip(3))
+	// logger := logger.WithOptions(zap.AddCallerSkip(1))
 	switch lv {
-	case log.Debug:
+	case Debug:
 		writer = logger.Debug
-	case log.Info:
+	case Info:
 		writer = logger.Info
-	case log.Warning:
+	case Warning:
 		writer = logger.Warn
-	case log.Error:
+	case Error:
 		writer = logger.Error
-	case log.Fatal:
+	case Fatal:
 		writer = logger.Fatal
 	}
-	switch v := payload.(type) {
-	case string:
-		writer(v)
-	case []zap.Field:
-		writer("", v...)
-	default:
-		writer(fmt.Sprintf("%v", payload))
-	}
+	writer(msg, fields...)
 }

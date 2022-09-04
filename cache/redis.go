@@ -1,18 +1,26 @@
 package cache
 
 import (
+	"encoding/json"
 	"fmt"
-	"service/config"
 	"time"
 
-	"github.com/crosstalkio/log"
+	"service/config"
+	"service/log"
+
 	"github.com/go-redis/redis/v7"
 )
+
+const Miss = Error("cache: miss")
+
+type Error string
+
+func (e Error) Error() string { return string(e) }
 
 var client *redis.Client
 var expire time.Duration
 
-func Init(s log.Sugar) error {
+func Init() error {
 	cfg := config.Get()
 	var err error
 	redisOpts := &redis.Options{
@@ -22,19 +30,19 @@ func Init(s log.Sugar) error {
 	client = redis.NewClient(redisOpts)
 	_, err = client.Ping().Result()
 	if err != nil {
-		s.Fatalf("Failed to ping redis: %s", err.Error())
+		log.Errorf("Failed to ping redis: %s", err.Error())
 		return err
 	}
 	value := cfg.GetString("redis.expire")
 	expire, err = time.ParseDuration(value)
 	if err != nil {
-		s.Errorf("Invalid expire duration: %s", value)
+		log.Errorf("Invalid expire duration: %s", value)
 		return err
 	}
 	return nil
 }
 
-func Deinit(s log.Sugar) {
+func Deinit() {
 	if client != nil {
 		client.Close()
 		client = nil
@@ -51,4 +59,23 @@ func Get(key string) ([]byte, error) {
 
 func Set(key string, val []byte) error {
 	return client.Set(key, val, expire).Err()
+}
+
+func Unmarshal(key string, val interface{}) error {
+	data, err := Get(key)
+	if err != nil {
+		return err
+	}
+	if data == nil {
+		return Miss
+	}
+	return json.Unmarshal(data, val)
+}
+
+func Marshal(key string, val interface{}) error {
+	data, err := json.Marshal(val)
+	if err != nil {
+		return err
+	}
+	return Set(key, data)
 }
