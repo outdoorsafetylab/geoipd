@@ -2,18 +2,14 @@ package controller
 
 import (
 	"net/http"
+	"service/model"
 	"service/version"
-	"time"
 )
 
 type ConfigController struct{}
 
 func (c *ConfigController) GetVersion(w http.ResponseWriter, r *http.Request) {
-	res := &struct {
-		Time   time.Time `json:"time"`
-		Commit string    `json:"commit"`
-		Tag    string    `json:"tag"`
-	}{
+	res := &model.Version{
 		Time:   version.Time(),
 		Commit: version.GitHash,
 		Tag:    version.GitTag,
