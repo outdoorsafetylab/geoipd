@@ -1,6 +1,7 @@
 package version
 
 import (
+	"service/model"
 	"strconv"
 	"time"
 )
@@ -11,11 +12,14 @@ var (
 	GitTag    string
 )
 
-func Time() time.Time {
-	var t time.Time
+func Get() *model.Version {
+	version := &model.Version{
+		Commit: GitHash,
+		Tag:    GitTag,
+	}
 	v, err := strconv.ParseInt(BuildTime, 10, 64)
 	if err == nil {
-		t = time.Unix(v, 0)
+		version.Time = time.Unix(v, 0)
 	}
-	return t
+	return version
 }
