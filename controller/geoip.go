@@ -26,6 +26,7 @@ func (c *GeoIPController) City(w http.ResponseWriter, r *http.Request) {
 	var city db.City
 	err := cache.Unmarshal(cacheKey, &city)
 	if err == nil {
+		log.Infof("Hit city location cache: %s", remoteAddr)
 		writeJSON(w, r, &city)
 		return
 	}
@@ -63,6 +64,7 @@ func (c *GeoIPController) Country(w http.ResponseWriter, r *http.Request) {
 	var country db.Country
 	err := cache.Unmarshal(cacheKey, &country)
 	if err == nil {
+		log.Infof("Hit country location cache: %s", remoteAddr)
 		writeJSON(w, r, &country)
 		return
 	}
