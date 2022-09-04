@@ -9,7 +9,7 @@ steps:
   - '-t'
   - 'asia.gcr.io/$PROJECT_ID/geoipd'
   - '-f'
-  - 'Dockerfile'
+  - 'build/Dockerfile'
   - '.'
 - name: 'gcr.io/cloud-builders/docker'
   args:
