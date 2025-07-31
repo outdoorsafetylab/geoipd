@@ -1,4 +1,4 @@
-FROM golang:1.18-alpine as builder
+FROM golang:1.24-alpine as builder
 
 RUN apk update \
     && apk upgrade \
@@ -30,6 +30,11 @@ COPY build/docker.yaml /
 COPY build/entrypoint.sh /
 
 ENV GEOIP2_LICENSE_KEY=
+ENV GEOIP2_CLOUD_STORAGE_BUCKET=
+ENV GEOIP2_CLOUD_STORAGE_REGION=
+ENV REDIS_HOST=127.0.0.1
+ENV REDIS_PORT=6379
+ENV REDIS_PASS=
 
 EXPOSE 8080
 

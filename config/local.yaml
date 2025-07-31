@@ -2,7 +2,14 @@ log:
   dev: true
 geoip2:
   edition: GeoLite2-Country
-  renew: 60s
+  renew: 60s  # Check for updates every 60 seconds
+  # Cloud storage configuration (optional)
+  # If configured, database will be stored in cloud storage
+  # cloud_storage:
+  #   provider: gcs  # only "gcs" is currently supported
+  #   bucket: geoipd
+  #   region: us-central1  # for GCS (not used but kept for future compatibility)
+  #   key_prefix: geoip2/  # optional prefix for storage keys
 port: 8080
 endpoint: /v1
 redis:
