@@ -1,0 +1,31 @@
+# Cloud deployment configuration
+# This configuration is optimized for cloud environments like Cloud Run
+# where instances are short-lived and need to avoid frequent MaxMind downloads
+
+log:
+  dev: false
+
+geoip2:
+  edition: GeoLite2-City
+  # Disable auto-renewal in cloud environments to avoid quota issues
+  # The database will be loaded from cloud storage on startup
+  renew: ""
+  
+  # Cloud storage configuration  
+  # Currently only Google Cloud Storage (GCS) is supported
+  cloud_storage:
+    provider: gcs  # only "gcs" is currently supported
+    bucket: ""  # Set via GEOIP2_CLOUD_STORAGE_BUCKET env var
+    region: ""  # Not used for GCS but kept for future compatibility
+    key_prefix: geoip/
+
+port: 8080
+endpoint: /v1
+
+# Redis configuration - can be external or disabled
+# If Redis is also ephemeral, consider using a managed Redis service
+redis:
+  host: 127.0.0.1  # Set via REDIS_HOST env var
+  port: 6379       # Set via REDIS_PORT env var  
+  pass: ""         # Set via REDIS_PASS env var
+  expire: 3600s    # Longer cache duration for cloud deployments

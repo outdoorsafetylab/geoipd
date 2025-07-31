@@ -15,6 +15,7 @@ import (
 
 	"service/config"
 	"service/log"
+	"service/storage"
 
 	"github.com/oschwald/geoip2-golang"
 )
@@ -28,7 +29,7 @@ func Init() error {
 	key := cfg.GetString("geoip2.license_key")
 	if key == "" {
 		log.Errorf("Please specify 'geoip2.license_key' in YAML config or set GEOIP2_LICENSE_KEY environment variable in order to download DB.")
-		return errors.New("Missing license key")
+		return errors.New("missing license key")
 	}
 	edition := cfg.GetString("geoip2.edition")
 	db = newGeoIP2DB(key, edition)
@@ -121,22 +122,60 @@ func QueryCountry(ip net.IP) (*Country, error) {
 
 type geoIP2DB struct {
 	sync.Mutex
-	licenseKey string
-	edition    string
-	etag       string
-	modTime    time.Time
-	path       string
-	reader     *geoip2.Reader
+	licenseKey   string
+	edition      string
+	etag         string
+	modTime      time.Time
+	path         string
+	reader       *geoip2.Reader
+	cloudStorage storage.CloudStorage
 }
 
 func newGeoIP2DB(licenseKey, edition string) *geoIP2DB {
+	cfg := config.Get()
+	var cloudStorage storage.CloudStorage
+
+	// Initialize cloud storage if configured
+	if cfg.IsSet("geoip2.cloud_storage.provider") {
+		storageConfig := &storage.Config{
+			Provider:  cfg.GetString("geoip2.cloud_storage.provider"),
+			Bucket:    cfg.GetString("geoip2.cloud_storage.bucket"),
+			Region:    cfg.GetString("geoip2.cloud_storage.region"),
+			KeyPrefix: cfg.GetString("geoip2.cloud_storage.key_prefix"),
+		}
+
+		var err error
+		cloudStorage, err = storage.NewCloudStorage(storageConfig)
+		if err != nil {
+			log.Errorf("Failed to initialize cloud storage: %s", err.Error())
+			log.Warnf("Falling back to local storage")
+			cloudStorage = nil
+		} else {
+			log.Infof("Initialized cloud storage: %s://%s", storageConfig.Provider, storageConfig.Bucket)
+		}
+	}
+
 	return &geoIP2DB{
-		licenseKey: licenseKey,
-		edition:    edition,
+		licenseKey:   licenseKey,
+		edition:      edition,
+		cloudStorage: cloudStorage,
 	}
 }
 
 func (db *geoIP2DB) renew() error {
+	// If cloud storage is configured, try to load from there first
+	if db.cloudStorage != nil {
+		path, err := db.loadFromCloudStorage()
+		if err != nil {
+			log.Warnf("Failed to load from cloud storage: %s", err.Error())
+			// Fall through to download from MaxMind
+		} else if path != "" {
+			// Successfully loaded from cloud storage
+			return db.openDatabase(path)
+		}
+	}
+
+	// Download from MaxMind (either no cloud storage or cloud storage failed/empty)
 	path, err := db.download()
 	if err != nil {
 		return err
@@ -144,6 +183,11 @@ func (db *geoIP2DB) renew() error {
 	if path == "" {
 		return nil
 	}
+
+	return db.openDatabase(path)
+}
+
+func (db *geoIP2DB) openDatabase(path string) error {
 	log.Infof("Opening DB: %s", path)
 	reader, err := geoip2.Open(path)
 	if err != nil {
@@ -163,6 +207,69 @@ func (db *geoIP2DB) renew() error {
 	}
 	db.path = path
 	return nil
+}
+
+func (db *geoIP2DB) loadFromCloudStorage() (string, error) {
+	key := fmt.Sprintf("%s.mmdb", db.edition)
+
+	// Check if database exists in cloud storage
+	exists, err := db.cloudStorage.Exists(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to check cloud storage: %w", err)
+	}
+	if !exists {
+		log.Infof("Database not found in cloud storage: %s", key)
+		return "", nil
+	}
+
+	// Get ETag from cloud storage metadata
+	metadata, err := db.cloudStorage.GetMetadata(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to get metadata from cloud storage: %w", err)
+	}
+
+	cloudETag := metadata["etag"]
+	if cloudETag != "" {
+		// Check if ETag has changed since last load
+		if db.etag == cloudETag {
+			log.Infof("Cloud storage ETag unchanged: %s - skipping download", cloudETag)
+			return "", nil // No download needed
+		}
+
+		log.Infof("Found new ETag in cloud storage: %s (previous: %s)", cloudETag, db.etag)
+		db.etag = cloudETag
+	}
+
+	// Download database from cloud storage
+	reader, err := db.cloudStorage.Download(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to download from cloud storage: %w", err)
+	}
+	defer reader.Close()
+
+	// Create temporary file
+	outfile, err := os.CreateTemp("", db.edition)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer outfile.Close()
+
+	// Copy data to temporary file
+	_, err = io.Copy(outfile, reader)
+	if err != nil {
+		return "", fmt.Errorf("failed to copy data from cloud storage: %w", err)
+	}
+
+	// Get modification time
+	modTime, err := db.cloudStorage.GetLastModified(key)
+	if err != nil {
+		log.Warnf("Failed to get modification time from cloud storage: %s", err.Error())
+		modTime = time.Now()
+	}
+	db.modTime = modTime
+
+	log.Infof("Successfully loaded database from cloud storage: %s", outfile.Name())
+	return outfile.Name(), nil
 }
 
 func (db *geoIP2DB) download() (string, error) {
@@ -223,6 +330,16 @@ func (db *geoIP2DB) download() (string, error) {
 				db.etag = res.Header.Get("Etag")
 				db.modTime = header.ModTime
 				log.Infof("Updating etag: %s => %s", filename, db.etag)
+
+				// Store in cloud storage if configured
+				if db.cloudStorage != nil {
+					err := db.storeInCloudStorage(outfile.Name())
+					if err != nil {
+						log.Errorf("Failed to store in cloud storage: %s", err.Error())
+						// Don't fail the download, just log the error
+					}
+				}
+
 				return outfile.Name(), nil
 			} else {
 				_, err := io.CopyN(io.Discard, tr, header.Size)
@@ -236,5 +353,33 @@ func (db *geoIP2DB) download() (string, error) {
 		}
 	}
 	log.Errorf("Not found: %s", filename)
-	return "", fmt.Errorf("Not found: %s", filename)
+	return "", fmt.Errorf("not found: %s", filename)
+}
+
+func (db *geoIP2DB) storeInCloudStorage(localPath string) error {
+	key := fmt.Sprintf("%s.mmdb", db.edition)
+
+	// Open the local file
+	file, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to open local file: %w", err)
+	}
+	defer file.Close()
+
+	// Prepare metadata with ETag
+	metadata := map[string]string{
+		"etag":          db.etag,
+		"edition":       db.edition,
+		"download_time": time.Now().Format(time.RFC3339),
+	}
+
+	// Upload to cloud storage
+	log.Infof("Storing database in cloud storage: %s", key)
+	err = db.cloudStorage.UploadWithMetadata(key, file, metadata)
+	if err != nil {
+		return fmt.Errorf("failed to upload to cloud storage: %w", err)
+	}
+
+	log.Infof("Successfully stored database in cloud storage with ETag: %s", db.etag)
+	return nil
 }

@@ -1,0 +1,2 @@
+- don't commit credentials
+- the source code should conform to staticcheck
