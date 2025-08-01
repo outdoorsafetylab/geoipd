@@ -157,9 +157,14 @@ Create a Google Cloud service account with these roles:
 ```bash
 # Enable required APIs
 gcloud services enable artifactregistry.googleapis.com
-gcloud services enable containerregistry.googleapis.com
 gcloud services enable run.googleapis.com
 gcloud services enable storage.googleapis.com
+
+# Create Artifact Registry repository for Docker images
+gcloud artifacts repositories create geoipd \
+    --repository-format=docker \
+    --location=$REGION \
+    --description="Docker repository for geoipd"
 
 # Create service account
 gcloud iam service-accounts create github-actions \
@@ -175,14 +180,10 @@ gcloud projects add-iam-policy-binding PROJECT_ID \
     --member="serviceAccount:github-actions@PROJECT_ID.iam.gserviceaccount.com" \
     --role="roles/storage.admin"
 
-# Container/Artifact Registry permissions (GCR now uses Artifact Registry backend)
+# Artifact Registry permissions for Docker image storage
 gcloud projects add-iam-policy-binding PROJECT_ID \
     --member="serviceAccount:github-actions@PROJECT_ID.iam.gserviceaccount.com" \
     --role="roles/artifactregistry.writer"
-
-gcloud projects add-iam-policy-binding PROJECT_ID \
-    --member="serviceAccount:github-actions@PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/containerregistry.ServiceAgent"
 
 gcloud projects add-iam-policy-binding PROJECT_ID \
     --member="serviceAccount:github-actions@PROJECT_ID.iam.gserviceaccount.com" \
@@ -195,19 +196,13 @@ gcloud iam service-accounts keys create github-actions-key.json \
 
 Use the contents of `github-actions-key.json` as the value for `GCP_SERVICE_ACCOUNT_KEY`.
 
-### Option: Migrate to Artifact Registry (Future-proof)
+### Image Storage
 
-For better long-term support, you can migrate from Container Registry to Artifact Registry:
+The workflows now use **Google Artifact Registry** for Docker image storage:
+- **Staging**: Builds and stores images in `$REGION-docker.pkg.dev/PROJECT_ID/geoipd/geoipd`
+- **Production**: Uses DockerHub images directly for deployment
 
-```bash
-# Create an Artifact Registry repository
-gcloud artifacts repositories create geoipd \
-    --repository-format=docker \
-    --location=asia-east1 \
-    --description="Docker repository for geoipd"
-```
-
-Then update the workflows to use: `asia-east1-docker.pkg.dev/PROJECT_ID/geoipd/geoipd` instead of `asia.gcr.io/PROJECT_ID/geoipd`
+This provides better performance, security, and is Google's recommended approach.
 
 ## Workflow Overview
 
@@ -216,7 +211,7 @@ Then update the workflows to use: `asia-east1-docker.pkg.dev/PROJECT_ID/geoipd/g
 - **Trigger**: Push to `master` branch
 - **Actions**:
   - Builds Docker image with git metadata
-  - Pushes to Google Container Registry
+  - Pushes to Google Artifact Registry
   - Deploys to Cloud Run service `geoipd-alpha`
   - Tests service with known IPs (8.8.8.8 and 1.1.1.1)
 
@@ -231,9 +226,10 @@ Then update the workflows to use: `asia-east1-docker.pkg.dev/PROJECT_ID/geoipd/g
 
 ## Migration Notes
 
-These workflows replicate the functionality of your existing Cloud Build setup:
+These workflows migrate from your existing Cloud Build setup with improvements:
 
-- `build/ci/cloud-run.yaml` → GitHub Actions workflows with Cloud Run deployment
+- `build/ci/cloud-run.yaml` → GitHub Actions workflows with Cloud Run deployment  
 - `build/ci/dockerhub.yaml` → Production workflow DockerHub publishing
+- **Container Registry** → **Artifact Registry** for better performance and security
 
 The workflows maintain the same build arguments, environment variables, and deployment configurations as your original Cloud Build setup.
