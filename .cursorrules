@@ -1,4 +1,5 @@
 - don't commit credentials
-- the source code should conform to staticcheck
-- markdown files should confirm to markdownlint
+- the source code should conform to [staticcheck](https://staticcheck.dev/)
+- commit message should conform to [commitlint](https://commitlint.js.org/)
+- markdown files should conform to [markdownlint](https://github.com/markdownlint/markdownlint)
 - confirm with human before `git push`
