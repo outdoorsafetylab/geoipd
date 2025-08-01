@@ -199,6 +199,7 @@ Use the contents of `github-actions-key.json` as the value for `GCP_SERVICE_ACCO
 ### Image Storage
 
 The workflows now use **Google Artifact Registry** for Docker image storage:
+
 - **Staging**: Builds and stores images in `$REGION-docker.pkg.dev/PROJECT_ID/geoipd/geoipd`
 - **Production**: Uses DockerHub images directly for deployment
 

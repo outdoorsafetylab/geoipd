@@ -34,16 +34,7 @@ jobs:
       uses: google-github-actions/setup-gcloud@v2
 
     - name: Configure Docker to use Artifact Registry
-      run: |
-        if [ -z "${{ env.REGION }}" ]; then
-          echo "❌ Error: REGION environment variable is not set!"
-          echo "Please set the GCP_REGION GitHub variable in your repository settings."
-          echo "Go to: Settings → Secrets and variables → Actions → Variables"
-          echo "Add: GCP_REGION = asia-east1 (or your preferred region)"
-          exit 1
-        fi
-        echo "Configuring Docker for Artifact Registry in region: ${{ env.REGION }}"
-        gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+      run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
 
     - name: Get Git metadata
       id: git
@@ -53,12 +44,7 @@ jobs:
 
     - name: Build and push Docker image
       run: |
-        if [ -z "${{ env.REGION }}" ]; then
-          echo "❌ Error: REGION environment variable is not set!"
-          exit 1
-        fi
         IMAGE_URL="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/geoipd"
-        echo "Building and pushing image: $IMAGE_URL"
         docker build \
           --build-arg GIT_HASH=${{ steps.git.outputs.hash }} \
           --build-arg GIT_TAG=${{ steps.git.outputs.tag }} \
@@ -69,13 +55,7 @@ jobs:
 
     - name: Deploy to Cloud Run
       run: |
-        if [ -z "${{ env.REGION }}" ]; then
-          echo "❌ Error: REGION environment variable is not set!"
-          exit 1
-        fi
         IMAGE_URL="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/geoipd"
-        echo "Deploying image: $IMAGE_URL"
-        echo "To service: ${{ env.SERVICE_NAME }} in region: ${{ env.REGION }}"
         gcloud run deploy ${{ env.SERVICE_NAME }} \
           --image=$IMAGE_URL \
           --region=${{ env.REGION }} \

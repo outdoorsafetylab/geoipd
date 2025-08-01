@@ -1,3 +1,4 @@
 - don't commit credentials
 - the source code should conform to staticcheck
 - markdown files should confirm to markdownlint
+- confirm with human before `git push`
