@@ -33,7 +33,9 @@ jobs:
       uses: google-github-actions/setup-gcloud@v2
 
     - name: Configure Docker to use gcloud as a credential helper
-      run: gcloud auth configure-docker asia.gcr.io
+      run: |
+        gcloud auth configure-docker asia.gcr.io
+        gcloud auth configure-docker
 
     - name: Get Git metadata
       id: git

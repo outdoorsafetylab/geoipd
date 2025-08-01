@@ -155,6 +155,12 @@ This would store files as `gs://your-bucket/geoip2/GeoLite2-Country.mmdb` instea
 Create a Google Cloud service account with these roles:
 
 ```bash
+# Enable required APIs
+gcloud services enable artifactregistry.googleapis.com
+gcloud services enable containerregistry.googleapis.com
+gcloud services enable run.googleapis.com
+gcloud services enable storage.googleapis.com
+
 # Create service account
 gcloud iam service-accounts create github-actions \
     --description="Service account for GitHub Actions" \
@@ -168,6 +174,11 @@ gcloud projects add-iam-policy-binding PROJECT_ID \
 gcloud projects add-iam-policy-binding PROJECT_ID \
     --member="serviceAccount:github-actions@PROJECT_ID.iam.gserviceaccount.com" \
     --role="roles/storage.admin"
+
+# Container/Artifact Registry permissions (GCR now uses Artifact Registry backend)
+gcloud projects add-iam-policy-binding PROJECT_ID \
+    --member="serviceAccount:github-actions@PROJECT_ID.iam.gserviceaccount.com" \
+    --role="roles/artifactregistry.writer"
 
 gcloud projects add-iam-policy-binding PROJECT_ID \
     --member="serviceAccount:github-actions@PROJECT_ID.iam.gserviceaccount.com" \
@@ -183,6 +194,20 @@ gcloud iam service-accounts keys create github-actions-key.json \
 ```
 
 Use the contents of `github-actions-key.json` as the value for `GCP_SERVICE_ACCOUNT_KEY`.
+
+### Option: Migrate to Artifact Registry (Future-proof)
+
+For better long-term support, you can migrate from Container Registry to Artifact Registry:
+
+```bash
+# Create an Artifact Registry repository
+gcloud artifacts repositories create geoipd \
+    --repository-format=docker \
+    --location=asia-east1 \
+    --description="Docker repository for geoipd"
+```
+
+Then update the workflows to use: `asia-east1-docker.pkg.dev/PROJECT_ID/geoipd/geoipd` instead of `asia.gcr.io/PROJECT_ID/geoipd`
 
 ## Workflow Overview
 
