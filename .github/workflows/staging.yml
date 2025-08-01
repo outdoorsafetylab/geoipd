@@ -96,25 +96,38 @@ jobs:
         
         echo "Testing Google DNS (8.8.8.8) city lookup..."
         CITY_RESPONSE=$(curl -s -f "$SERVICE_URL/v1/city?ip=8.8.8.8")
-        echo "City response: $CITY_RESPONSE"
+        echo "City response (truncated): ${CITY_RESPONSE:0:200}..."
         
         echo "Testing Cloudflare DNS (1.1.1.1) country lookup..."
         COUNTRY_RESPONSE=$(curl -s -f "$SERVICE_URL/v1/country?ip=1.1.1.1")
-        echo "Country response: $COUNTRY_RESPONSE"
+        echo "Country response (truncated): ${COUNTRY_RESPONSE:0:200}..."
         
-        # Basic validation that responses contain expected fields
-        if echo "$CITY_RESPONSE" | grep -q '"city"'; then
-          echo "✅ City response contains city field"
+        # Validate API responses contain expected structure
+        if echo "$CITY_RESPONSE" | grep -q '"IP"' && echo "$CITY_RESPONSE" | grep -q '"City"'; then
+          echo "✅ City API returning valid GeoIP structure"
         else
-          echo "❌ City response missing city field"
+          echo "❌ City API response missing expected structure"
           exit 1
         fi
         
-        if echo "$COUNTRY_RESPONSE" | grep -q '"country"'; then
-          echo "✅ Country response contains country field"
+        if echo "$COUNTRY_RESPONSE" | grep -q '"IP"' && echo "$COUNTRY_RESPONSE" | grep -q '"Country"'; then
+          echo "✅ Country API returning valid GeoIP structure" 
         else
-          echo "❌ Country response missing country field"
+          echo "❌ Country API response missing expected structure"
           exit 1
         fi
         
-        echo "🎉 All tests passed!"
+        # Validate that some geographic data is present
+        if echo "$CITY_RESPONSE" | grep -q '"Country".*"IsoCode":"US"'; then
+          echo "✅ City lookup correctly identified US for Google DNS"
+        else
+          echo "⚠️  Warning: Unexpected country for Google DNS IP"
+        fi
+        
+        if echo "$COUNTRY_RESPONSE" | grep -q '"RegisteredCountry".*"IsoCode":"AU"'; then
+          echo "✅ Country lookup correctly identified AU for Cloudflare DNS"
+        else
+          echo "⚠️  Warning: Unexpected country for Cloudflare DNS IP"
+        fi
+        
+        echo "🎉 All API tests passed!"
