@@ -23,7 +23,7 @@ steps:
   - --image=asia.gcr.io/$PROJECT_ID/geoipd
   - --region=$_REGION
   - --platform=managed
-  - --set-env-vars=GEOIP2_CLOUD_STORAGE_BUCKET=geoip2
+  - --set-env-vars=GEOIP2_CLOUD_STORAGE_BUCKET=geoipd
   - --set-env-vars=GEOIP2_CLOUD_STORAGE_PROVIDER=gcs
   - --memory=128Mi
   - --cpu=1

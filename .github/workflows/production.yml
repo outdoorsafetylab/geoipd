@@ -1,0 +1,128 @@
+name: Deploy Production
+
+on:
+  push:
+    tags: [ '*' ]
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  SERVICE_NAME: geoipd
+  REGION: ${{ vars.GCP_REGION }}
+  DOCKERHUB_REPO: outdoorsafetylab/geoipd
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Get Git metadata
+      id: git
+      run: |
+        echo "hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+    - name: Log in to DockerHub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Build and push to DockerHub
+      run: |
+        # Build the image
+        docker build \
+          --build-arg GIT_HASH=${{ steps.git.outputs.hash }} \
+          --build-arg GIT_TAG=${{ steps.git.outputs.tag }} \
+          -t ${{ env.DOCKERHUB_REPO }} \
+          -f build/Dockerfile \
+          .
+        
+        # Tag with version
+        docker tag ${{ env.DOCKERHUB_REPO }} ${{ env.DOCKERHUB_REPO }}:${{ steps.git.outputs.tag }}
+        
+        # Push both latest and tagged versions
+        docker push ${{ env.DOCKERHUB_REPO }}
+        docker push ${{ env.DOCKERHUB_REPO }}:${{ steps.git.outputs.tag }}
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Deploy to Cloud Run
+      run: |
+        gcloud run deploy ${{ env.SERVICE_NAME }} \
+          --image=${{ env.DOCKERHUB_REPO }}:${{ steps.git.outputs.tag }} \
+          --region=${{ env.REGION }} \
+          --platform=managed \
+          --set-env-vars=GEOIP2_CLOUD_STORAGE_BUCKET=geoipd \
+          --set-env-vars=GEOIP2_CLOUD_STORAGE_PROVIDER=gcs \
+          --memory=128Mi \
+          --cpu=1 \
+          --allow-unauthenticated
+
+    - name: Get service URL
+      id: service-url
+      run: |
+        SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+          --region=${{ env.REGION }} \
+          --format='value(status.url)')
+        echo "url=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+    - name: Wait for service to be ready
+      run: |
+        echo "Waiting for service to be ready..."
+        for i in {1..30}; do
+          if curl -s -f "${{ steps.service-url.outputs.url }}/v1/version" > /dev/null; then
+            echo "Service is ready!"
+            break
+          fi
+          echo "Attempt $i/30: Service not ready yet, waiting 10s..."
+          sleep 10
+        done
+
+    - name: Test service with known IPs
+      run: |
+        SERVICE_URL="${{ steps.service-url.outputs.url }}"
+        
+        echo "Testing version endpoint..."
+        VERSION_RESPONSE=$(curl -s -f "$SERVICE_URL/v1/version")
+        echo "Version: $VERSION_RESPONSE"
+        
+        echo "Testing Google DNS (8.8.8.8) city lookup..."
+        CITY_RESPONSE=$(curl -s -f "$SERVICE_URL/v1/city?ip=8.8.8.8")
+        echo "City response: $CITY_RESPONSE"
+        
+        echo "Testing Cloudflare DNS (1.1.1.1) country lookup..."
+        COUNTRY_RESPONSE=$(curl -s -f "$SERVICE_URL/v1/country?ip=1.1.1.1")
+        echo "Country response: $COUNTRY_RESPONSE"
+        
+        # Basic validation that responses contain expected fields
+        if echo "$CITY_RESPONSE" | grep -q '"city"'; then
+          echo "✅ City response contains city field"
+        else
+          echo "❌ City response missing city field"
+          exit 1
+        fi
+        
+        if echo "$COUNTRY_RESPONSE" | grep -q '"country"'; then
+          echo "✅ Country response contains country field"
+        else
+          echo "❌ Country response missing country field"
+          exit 1
+        fi
+        
+        echo "🎉 All tests passed!"
