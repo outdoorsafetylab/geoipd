@@ -5,7 +5,7 @@ on:
     branches: [ master ]
 
 env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
   SERVICE_NAME: geoipd-alpha
   REGION: ${{ vars.GCP_REGION }}
 

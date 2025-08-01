@@ -5,3 +5,10 @@
 *.pb.go
 *.mmdb
 secret.yaml
+
+# Credential files - NEVER commit these
+.github/.secrets
+.github/*key*.json
+.set_license_key.sh
+**/credentials.json
+**/service-account-key.json

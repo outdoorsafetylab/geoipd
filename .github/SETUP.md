@@ -8,7 +8,6 @@ Navigate to your GitHub repository → Settings → Secrets and variables → Ac
 
 ### Google Cloud Platform Secrets
 
-- **`GCP_PROJECT_ID`** - Your Google Cloud project ID (e.g., `outdoorsafetylab`)
 - **`GCP_SERVICE_ACCOUNT_KEY`** - JSON key for a service account with the following permissions:
   - Cloud Run Admin
   - Storage Admin  
@@ -25,7 +24,8 @@ Navigate to your GitHub repository → Settings → Secrets and variables → Ac
 
 Navigate to your GitHub repository → Settings → Secrets and variables → Actions → Variables, and add the following variables:
 
-- **`GCP_REGION`** - Google Cloud region for deployments (e.g., `asia-southeast1`)
+- **`GCP_PROJECT_ID`** - Your Google Cloud project ID (e.g., `outdoorsafetylab`)
+- **`GCP_REGION`** - Google Cloud region for deployments (e.g., `asia-east1`)
 
 ## Google Cloud Storage Bucket Setup
 
@@ -49,7 +49,7 @@ Set this as the `GEOIP2_LICENSE_KEY` environment variable or in your service con
 PROJECT_ID="your-project-id"
 
 # Create the bucket (choose a unique name and appropriate region)
-gsutil mb -p $PROJECT_ID -c STANDARD -l asia-southeast1 gs://geoipd
+gsutil mb -p $PROJECT_ID -c STANDARD -l asia-east1 gs://geoipd
 
 # Enable versioning (optional but recommended)
 gsutil versioning set on gs://geoipd
@@ -96,8 +96,8 @@ The service account needs these permissions on the bucket:
 - **Storage Object Admin** - To manage metadata and lifecycle
 
 ```bash
-# Grant bucket permissions to the service account
-gsutil iam ch serviceAccount:github-actions@$PROJECT_ID.iam.gserviceaccount.com:objectAdmin gs://geoipd
+# Grant bucket permissions to the service account (replace PROJECT_ID with your actual project ID)
+gsutil iam ch serviceAccount:github-actions@PROJECT_ID.iam.gserviceaccount.com:objectAdmin gs://geoipd
 ```
 
 ### Service Configuration
@@ -112,11 +112,11 @@ You'll also need to set the **MaxMind license key** in your Cloud Run service:
 ```bash
 # Update your Cloud Run services with the MaxMind license key
 gcloud run services update geoipd-alpha \
-  --region=asia-southeast1 \
+  --region=asia-east1 \
   --set-env-vars=GEOIP2_LICENSE_KEY=your_maxmind_license_key
 
 gcloud run services update geoipd \
-  --region=asia-southeast1 \
+  --region=asia-east1 \
   --set-env-vars=GEOIP2_LICENSE_KEY=your_maxmind_license_key
 ```
 
@@ -128,7 +128,7 @@ echo "your_maxmind_license_key" | gcloud secrets create geoip2-license-key --dat
 
 # Update services to use the secret
 gcloud run services update geoipd-alpha \
-  --region=asia-southeast1 \
+  --region=asia-east1 \
   --set-env-vars=GEOIP2_LICENSE_KEY=$(gcloud secrets versions access latest --secret=geoip2-license-key)
 ```
 
