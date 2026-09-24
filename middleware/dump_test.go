@@ -31,6 +31,11 @@ func TestDumpOmitsIPs(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", callerIP)
 	req.Header.Set("Forwarded", "for="+callerIP)
 	req.Header.Set("X-Real-Ip", callerIP)
+	req.Header.Set("Cf-Connecting-Ip", callerIP)
+	req.Header.Set("True-Client-Ip", callerIP)
+	req.Header.Set("Referer", "https://example.com/?ip="+queriedIP)
+	// A leading empty value must not hide the ones after it.
+	req.Header["X-Forwarded-For"] = []string{"", callerIP}
 	rec := httptest.NewRecorder()
 	Dump(inner).ServeHTTP(rec, req)
 

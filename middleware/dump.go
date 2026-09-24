@@ -56,14 +56,17 @@ type response struct {
 	Headers http.Header
 }
 
-// clientAddressHeaders carry the caller's IP, which is what this service is
-// asked about; they are redacted from the dump.
-var clientAddressHeaders = []string{"X-Forwarded-For", "Forwarded", "X-Real-Ip"}
+// ipHeaders can carry the caller's IP, or the IP being looked up (Referer can
+// hold a ?ip= URL); they are redacted from the dump.
+var ipHeaders = []string{
+	"X-Forwarded-For", "Forwarded", "X-Real-Ip",
+	"Cf-Connecting-Ip", "True-Client-Ip", "Referer",
+}
 
 func redact(h http.Header) http.Header {
 	out := h.Clone()
-	for _, name := range clientAddressHeaders {
-		if out.Get(name) != "" {
+	for _, name := range ipHeaders {
+		if _, ok := out[http.CanonicalHeaderKey(name)]; ok {
 			out.Set(name, "[redacted]")
 		}
 	}
