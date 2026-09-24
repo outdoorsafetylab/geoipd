@@ -1,20 +1,15 @@
 package middleware
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"runtime/debug"
-	"strings"
 
 	"service/log"
 )
 
 type responseDumper struct {
 	w http.ResponseWriter
-	b bytes.Buffer
 	s int
 }
 
@@ -23,7 +18,6 @@ func (d *responseDumper) Header() http.Header {
 }
 
 func (d *responseDumper) Write(data []byte) (int, error) {
-	d.b.Write(data)
 	return d.w.Write(data)
 }
 
@@ -39,18 +33,11 @@ func (d *responseDumper) WriteHeader(statusCode int) {
 
 func Dump(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Debugf("Handling: %s %s", r.Method, r.RequestURI)
-		data, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to read request body: %s", err.Error()), 500)
-			return
-		}
-		if data != nil {
-			r.Body = io.NopCloser(bytes.NewBuffer(data))
-		}
+		// Log the path only: the query carries the IP being looked up.
+		log.Debugf("Handling: %s %s", r.Method, r.URL.Path)
 		dumper := &responseDumper{w: w}
 		handler.ServeHTTP(dumper, r)
-		err = dump(r, data, dumper)
+		err := dump(r, dumper)
 		if err != nil {
 			log.Errorf("Failed to dump: %s", err.Error())
 		}
@@ -59,54 +46,50 @@ func Dump(handler http.Handler) http.Handler {
 
 type request struct {
 	Method  string
-	URI     string
+	Path    string
 	Proto   string
-	Host    string
 	Headers http.Header
-	Body    interface{}
 }
 
 type response struct {
 	Code    int
 	Headers http.Header
-	Body    interface{}
 }
 
-func dump(r *http.Request, data []byte, d *responseDumper) error {
+// clientAddressHeaders carry the caller's IP, which is what this service is
+// asked about; they are redacted from the dump.
+var clientAddressHeaders = []string{"X-Forwarded-For", "Forwarded", "X-Real-Ip"}
+
+func redact(h http.Header) http.Header {
+	out := h.Clone()
+	for _, name := range clientAddressHeaders {
+		if out.Get(name) != "" {
+			out.Set(name, "[redacted]")
+		}
+	}
+	return out
+}
+
+// dump leaves out the query and both bodies: the query and the response body
+// carry the IP being looked up.
+func dump(r *http.Request, d *responseDumper) error {
 	out := &struct {
 		Request  *request
 		Response *response
 	}{
 		Request: &request{
 			Method:  r.Method,
-			URI:     r.RequestURI,
+			Path:    r.URL.Path,
 			Proto:   r.Proto,
-			Headers: r.Header,
+			Headers: redact(r.Header),
 		},
 		Response: &response{
-			Code: d.s,
+			Code:    d.s,
+			Headers: d.Header(),
 		},
-	}
-	if len(data) > 0 {
-		ctype := r.Header.Get("Content-Type")
-		if strings.HasPrefix(ctype, "application/json") {
-			out.Request.Body = json.RawMessage(data)
-		} else if strings.HasPrefix(ctype, "text/") {
-			out.Request.Body = string(data)
-		}
 	}
 	if out.Response.Code == 0 {
 		out.Response.Code = 200
-	}
-	out.Response.Headers = d.Header()
-	data = d.b.Bytes()
-	if len(data) > 0 {
-		ctype := d.Header().Get("Content-Type")
-		if strings.HasPrefix(ctype, "application/json") {
-			out.Response.Body = json.RawMessage(data)
-		} else if strings.HasPrefix(ctype, "text/") {
-			out.Request.Body = string(data)
-		}
 	}
 	data, err := json.Marshal(out)
 	if err != nil {

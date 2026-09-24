@@ -1,5 +1,6 @@
 log:
   dev: true
+  level: debug  # default is info
 geoip2:
   edition: GeoLite2-Country
   renew: 60s  # Check for updates every 60 seconds
