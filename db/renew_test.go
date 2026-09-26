@@ -20,21 +20,20 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
-// testdata/old.mmdb and new.mmdb map 203.0.113.0/24 to JP and TW, built at
-// these epochs.
-var (
-	oldBuilt = time.Unix(1700000000, 0)
-	newBuilt = time.Unix(1800000000, 0)
-)
+// testdata/old.mmdb and new.mmdb map 203.0.113.0/24 to JP and TW.
 
 const edition = "GeoLite2-Country"
 
+var now = time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC)
+
 // memStorage is a CloudStorage holding one object in memory.
 type memStorage struct {
-	data     []byte
-	etag     string
-	uploads  int
-	uploaded []byte
+	data      []byte
+	etag      string
+	stored    time.Time
+	downloads int
+	uploads   int
+	uploaded  []byte
 }
 
 func (m *memStorage) UploadWithMetadata(key string, r io.Reader, meta map[string]string) error {
@@ -44,15 +43,14 @@ func (m *memStorage) UploadWithMetadata(key string, r io.Reader, meta map[string
 	return err
 }
 func (m *memStorage) Download(string) (io.ReadCloser, error) {
+	m.downloads++
 	return io.NopCloser(bytes.NewReader(m.data)), nil
 }
 func (m *memStorage) GetMetadata(string) (map[string]string, error) {
 	return map[string]string{"etag": m.etag}, nil
 }
-func (m *memStorage) Exists(string) (bool, error) { return m.data != nil, nil }
-func (m *memStorage) GetLastModified(string) (time.Time, error) {
-	return time.Now(), nil
-}
+func (m *memStorage) Exists(string) (bool, error)               { return m.data != nil, nil }
+func (m *memStorage) GetLastModified(string) (time.Time, error) { return m.stored, nil }
 
 func readFixture(t *testing.T, name string) []byte {
 	b, err := os.ReadFile("testdata/" + name)
@@ -62,26 +60,38 @@ func readFixture(t *testing.T, name string) []byte {
 	return b
 }
 
-// maxMind serves mmdb as the tar.gz MaxMind ships, or status when non-zero.
-func maxMind(t *testing.T, mmdb []byte, status int, hits *int) *httptest.Server {
+// maxMindServer serves mmdb as the tar.gz MaxMind ships, answers 304 to a
+// matching If-None-Match, and returns status instead when it is non-zero.
+type maxMindServer struct {
+	*httptest.Server
+	hits        int
+	ifNoneMatch []string
+}
+
+func maxMind(t *testing.T, mmdb []byte, status int) *maxMindServer {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	_ = tw.WriteHeader(&tar.Header{Name: edition + "_20270115/" + edition + ".mmdb", Mode: 0644, Size: int64(len(mmdb)), Typeflag: tar.TypeReg})
+	_ = tw.WriteHeader(&tar.Header{Name: edition + "_20260925/" + edition + ".mmdb", Mode: 0644, Size: int64(len(mmdb)), Typeflag: tar.TypeReg})
 	_, _ = tw.Write(mmdb)
 	_ = tw.Close()
 	_ = gz.Close()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		*hits++
-		if status != 0 {
+	m := &maxMindServer{}
+	m.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.hits++
+		m.ifNoneMatch = append(m.ifNoneMatch, r.Header.Get("If-None-Match"))
+		switch {
+		case status != 0:
 			w.WriteHeader(status)
-			return
+		case r.Header.Get("If-None-Match") == "maxmind-v2":
+			w.WriteHeader(304)
+		default:
+			w.Header().Set("Etag", "maxmind-v2")
+			_, _ = w.Write(buf.Bytes())
 		}
-		w.Header().Set("Etag", "maxmind-new")
-		_, _ = w.Write(buf.Bytes())
 	}))
-	t.Cleanup(srv.Close)
-	return srv
+	t.Cleanup(m.Close)
+	return m
 }
 
 // observeLogs routes the package logger to an observer for this test.
@@ -91,14 +101,16 @@ func observeLogs(t *testing.T) *observer.ObservedLogs {
 	return logs
 }
 
-func newTestDB(t *testing.T, cloud *memStorage, url string, now time.Time) *geoIP2DB {
+func newTestDB(t *testing.T, cloud *memStorage, url string) *geoIP2DB {
 	d := &geoIP2DB{
-		licenseKey:   "test-license-key",
-		edition:      edition,
-		cloudStorage: cloud,
-		maxAge:       7 * 24 * time.Hour,
-		downloadURL:  url + "/download?edition_id=%s&license_key=%s",
-		now:          func() time.Time { return now },
+		licenseKey:  "test-license-key",
+		edition:     edition,
+		maxAge:      7 * 24 * time.Hour,
+		downloadURL: url + "/download?edition_id=%s&license_key=%s",
+		now:         func() time.Time { return now },
+	}
+	if cloud != nil {
+		d.cloudStorage = cloud
 	}
 	t.Cleanup(func() {
 		if d.reader != nil {
@@ -112,6 +124,9 @@ func newTestDB(t *testing.T, cloud *memStorage, url string, now time.Time) *geoI
 }
 
 func country(t *testing.T, d *geoIP2DB) string {
+	if d.reader == nil {
+		t.Fatal("no database open")
+	}
 	c, err := d.reader.Country(net.ParseIP("203.0.113.7"))
 	if err != nil {
 		t.Fatal(err)
@@ -121,32 +136,58 @@ func country(t *testing.T, d *geoIP2DB) string {
 
 func TestFreshCloudCopyIsUsedWithoutAskingMaxMind(t *testing.T) {
 	observeLogs(t)
-	hits := 0
-	srv := maxMind(t, readFixture(t, "new.mmdb"), 0, &hits)
-	cloud := &memStorage{data: readFixture(t, "new.mmdb"), etag: "e"}
-	d := newTestDB(t, cloud, srv.URL, newBuilt.Add(24*time.Hour))
+	mm := maxMind(t, readFixture(t, "new.mmdb"), 0)
+	cloud := &memStorage{data: readFixture(t, "old.mmdb"), etag: "maxmind-v1", stored: now.Add(-24 * time.Hour)}
+	d := newTestDB(t, cloud, mm.URL)
 	if err := d.renew(); err != nil {
 		t.Fatal(err)
 	}
-	if hits != 0 {
-		t.Errorf("MaxMind asked %d times for a fresh cloud copy", hits)
+	if mm.hits != 0 {
+		t.Errorf("MaxMind asked %d times for a fresh cloud copy", mm.hits)
 	}
-	if got := country(t, d); got != "TW" {
-		t.Errorf("serving %s, want the cloud copy (TW)", got)
+	if got := country(t, d); got != "JP" {
+		t.Errorf("serving %s, want the cloud copy (JP)", got)
 	}
 }
 
-func TestStaleCloudCopyIsReplacedFromMaxMind(t *testing.T) {
+func TestRenewTickerAsksMaxMindWithTheCloudETag(t *testing.T) {
 	observeLogs(t)
-	hits := 0
-	srv := maxMind(t, readFixture(t, "new.mmdb"), 0, &hits)
-	cloud := &memStorage{data: readFixture(t, "old.mmdb"), etag: "e"}
-	d := newTestDB(t, cloud, srv.URL, oldBuilt.Add(30*24*time.Hour))
+	mm := maxMind(t, readFixture(t, "new.mmdb"), 0)
+	cloud := &memStorage{data: readFixture(t, "new.mmdb"), etag: "maxmind-v2", stored: now.Add(-24 * time.Hour)}
+	d := newTestDB(t, cloud, mm.URL)
 	if err := d.renew(); err != nil {
 		t.Fatal(err)
 	}
-	if hits != 1 {
-		t.Errorf("MaxMind asked %d times, want 1", hits)
+	// The ticker: the cloud copy is unchanged, so MaxMind is asked, with the
+	// ETag the cloud copy came with, and its 304 keeps the open database.
+	if err := d.renew(); err != nil {
+		t.Fatal(err)
+	}
+	if mm.hits != 1 || mm.ifNoneMatch[0] != "maxmind-v2" {
+		t.Errorf("MaxMind asked %d times with If-None-Match %q, want once with the cloud ETag", mm.hits, mm.ifNoneMatch)
+	}
+	if cloud.downloads != 1 {
+		t.Errorf("cloud copy fetched %d times, want 1", cloud.downloads)
+	}
+	if got := country(t, d); got != "TW" {
+		t.Errorf("serving %s, want TW", got)
+	}
+}
+
+func TestStaleCloudCopyIsReplacedWithoutFetchingIt(t *testing.T) {
+	observeLogs(t)
+	mm := maxMind(t, readFixture(t, "new.mmdb"), 0)
+	cloud := &memStorage{data: readFixture(t, "old.mmdb"), etag: "maxmind-v1", stored: now.Add(-30 * 24 * time.Hour)}
+	d := newTestDB(t, cloud, mm.URL)
+	if err := d.renew(); err != nil {
+		t.Fatal(err)
+	}
+	if mm.hits != 1 {
+		t.Errorf("MaxMind asked %d times, want 1", mm.hits)
+	}
+	// Only one database file on disk at a time: the stale copy is not fetched.
+	if cloud.downloads != 0 {
+		t.Errorf("stale cloud copy fetched %d times", cloud.downloads)
 	}
 	if got := country(t, d); got != "TW" {
 		t.Errorf("serving %s, want the MaxMind copy (TW)", got)
@@ -156,27 +197,39 @@ func TestStaleCloudCopyIsReplacedFromMaxMind(t *testing.T) {
 	}
 }
 
-func TestStaleCloudCopyIsKeptWhenMaxMindFails(t *testing.T) {
-	for name, status := range map[string]int{"http error": 500, "not modified": 304} {
+func TestStaleCloudCopyIsTheFallback(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mmdb   []byte
+		status int
+	}{
+		"http error":   {nil, 500},
+		"not modified": {nil, 304},
+		"corrupt file": {[]byte("not a database"), 0},
+	} {
 		t.Run(name, func(t *testing.T) {
 			observeLogs(t)
-			hits := 0
-			srv := maxMind(t, nil, status, &hits)
-			cloud := &memStorage{data: readFixture(t, "old.mmdb"), etag: "e"}
-			d := newTestDB(t, cloud, srv.URL, oldBuilt.Add(30*24*time.Hour))
+			mm := maxMind(t, tc.mmdb, tc.status)
+			cloud := &memStorage{data: readFixture(t, "old.mmdb"), etag: "maxmind-v1", stored: now.Add(-30 * 24 * time.Hour)}
+			d := newTestDB(t, cloud, mm.URL)
 			if err := d.renew(); err != nil {
-				t.Fatalf("renew failed instead of keeping the cloud copy: %v", err)
-			}
-			if hits != 1 {
-				t.Errorf("MaxMind asked %d times, want 1", hits)
+				t.Fatalf("renew failed instead of falling back: %v", err)
 			}
 			if got := country(t, d); got != "JP" {
 				t.Errorf("serving %s, want the cloud copy (JP)", got)
 			}
 			if cloud.uploads != 0 {
-				t.Errorf("stored %d copies back without a new download", cloud.uploads)
+				t.Errorf("stored %d copies back without a usable download", cloud.uploads)
 			}
 		})
+	}
+}
+
+func TestNoDatabaseAnywhereIsAnError(t *testing.T) {
+	observeLogs(t)
+	mm := maxMind(t, nil, 304)
+	d := newTestDB(t, &memStorage{}, mm.URL)
+	if err := d.renew(); err == nil {
+		t.Fatal("renew succeeded with no database open")
 	}
 }
 
@@ -186,14 +239,13 @@ func TestDownloadErrorDoesNotLeakLicenseKey(t *testing.T) {
 	url := srv.URL
 	srv.Close() // connection refused
 
-	// With a stale cloud copy the failure is logged and the copy kept.
-	stale := newTestDB(t, &memStorage{data: readFixture(t, "old.mmdb"), etag: "e"}, url, oldBuilt.Add(30*24*time.Hour))
+	// With a cloud copy the failure is logged and the copy used.
+	stale := newTestDB(t, &memStorage{data: readFixture(t, "old.mmdb"), etag: "e", stored: now.Add(-30 * 24 * time.Hour)}, url)
 	if err := stale.renew(); err != nil {
 		t.Fatal(err)
 	}
 	// With nothing to fall back on the failure is returned.
-	empty := newTestDB(t, &memStorage{}, url, time.Now())
-	err := empty.renew()
+	err := newTestDB(t, nil, url).renew()
 	if err == nil {
 		t.Fatal("renew with no DB at all succeeded")
 	}

@@ -130,7 +130,7 @@ type geoIP2DB struct {
 	path         string
 	reader       *geoip2.Reader
 	cloudStorage storage.CloudStorage
-	// maxAge is how old the cloud copy may be, by its own build date, before
+	// maxAge is how long ago the cloud copy may have been stored before
 	// MaxMind is asked for a newer one.
 	maxAge time.Duration
 	// downloadURL is the MaxMind download URL format: edition, license key.
@@ -188,49 +188,91 @@ func newGeoIP2DB(licenseKey, edition string) *geoIP2DB {
 }
 
 func (db *geoIP2DB) renew() error {
-	// If cloud storage is configured, try to load from there first
-	if db.cloudStorage != nil {
-		path, err := db.loadFromCloudStorage()
-		if err != nil {
-			log.Warnf("Failed to load from cloud storage: %s", err.Error())
-			// Fall through to download from MaxMind
-		} else if path != "" {
-			if err := db.openDatabase(path); err != nil {
-				return err
-			}
-			// On a platform that scales to zero an instance rarely lives until
-			// the renew ticker fires, so a cloud copy would never be replaced.
-			// Check its age here instead.
-			built := db.builtAt()
-			if db.now().Sub(built) <= db.maxAge {
-				return nil
-			}
-			log.Infof("Cloud copy was built %s, older than %s; checking MaxMind", built.Format(time.RFC3339), db.maxAge)
-		}
-	}
-
-	// Download from MaxMind (no cloud storage, cloud storage failed/empty or
-	// unchanged, or its copy is older than maxAge)
-	path, err := db.download()
-	if err != nil {
-		if db.hasReader() {
-			log.Warnf("Keeping the current DB: %s", err.Error())
+	// A cloud copy that has not been refreshed from MaxMind within maxAge is
+	// skipped: on a platform that scales to zero an instance rarely lives until
+	// the renew ticker fires, so this is where a stale copy gets replaced.
+	// Deciding from the object's timestamp, before its body is fetched, keeps a
+	// single database file on disk at a time.
+	if db.cloudStorage != nil && !db.cloudCopyStale() {
+		if db.openFromCloud() {
 			return nil
 		}
-		return err
+		// Unchanged since the last load (renew ticker), missing or unusable:
+		// ask MaxMind.
 	}
-	if path == "" {
+
+	path, err := db.download()
+	switch {
+	case err != nil:
+		log.Warnf("MaxMind download failed: %s", err.Error())
+	case path == "":
+		// 304: MaxMind has nothing newer than the ETag we sent.
+	default:
+		if err = db.openDatabase(path); err == nil {
+			// Store only a copy that opened, so a bad download never
+			// replaces the cloud copy other instances fall back on.
+			if db.cloudStorage != nil {
+				if err := db.storeInCloudStorage(path); err != nil {
+					log.Errorf("Failed to store in cloud storage: %s", err.Error())
+				}
+			}
+			return nil
+		}
+		os.Remove(path)
+	}
+
+	// MaxMind gave nothing usable. Keep what is open, else fall back to the
+	// cloud copy however old it is.
+	if db.hasReader() {
 		return nil
 	}
-
-	return db.openDatabase(path)
+	if db.cloudStorage != nil && db.openFromCloud() {
+		return nil
+	}
+	if err == nil {
+		err = errors.New("no GeoIP database available")
+	}
+	return err
 }
 
-// builtAt is the build date the open database carries in its metadata.
-func (db *geoIP2DB) builtAt() time.Time {
-	db.Lock()
-	defer db.Unlock()
-	return time.Unix(int64(db.reader.Metadata().BuildEpoch), 0)
+// cloudCopyStale reports whether the cloud copy was last stored longer ago than
+// maxAge. A copy is stored only after a MaxMind download, so this is the time
+// since the last refresh. Any error reads as not stale, which keeps the
+// behaviour from before maxAge existed.
+func (db *geoIP2DB) cloudCopyStale() bool {
+	key := fmt.Sprintf("%s.mmdb", db.edition)
+	exists, err := db.cloudStorage.Exists(key)
+	if err != nil || !exists {
+		return false
+	}
+	stored, err := db.cloudStorage.GetLastModified(key)
+	if err != nil {
+		log.Warnf("Failed to get cloud copy time: %s", err.Error())
+		return false
+	}
+	if age := db.now().Sub(stored); age > db.maxAge {
+		log.Infof("Cloud copy was stored %s, older than %s; checking MaxMind", stored.Format(time.RFC3339), db.maxAge)
+		return true
+	}
+	return false
+}
+
+// openFromCloud loads and opens the cloud copy, reporting whether a new
+// database is now in service.
+func (db *geoIP2DB) openFromCloud() bool {
+	path, err := db.loadFromCloudStorage()
+	if err != nil {
+		log.Warnf("Failed to load from cloud storage: %s", err.Error())
+		return false
+	}
+	if path == "" {
+		return false
+	}
+	if err := db.openDatabase(path); err != nil {
+		os.Remove(path)
+		return false
+	}
+	return true
 }
 
 func (db *geoIP2DB) hasReader() bool {
@@ -388,16 +430,6 @@ func (db *geoIP2DB) download() (string, error) {
 				db.etag = res.Header.Get("Etag")
 				db.modTime = header.ModTime
 				log.Infof("Updating etag: %s => %s", filename, db.etag)
-
-				// Store in cloud storage if configured
-				if db.cloudStorage != nil {
-					err := db.storeInCloudStorage(outfile.Name())
-					if err != nil {
-						log.Errorf("Failed to store in cloud storage: %s", err.Error())
-						// Don't fail the download, just log the error
-					}
-				}
-
 				return outfile.Name(), nil
 			} else {
 				_, err := io.CopyN(io.Discard, tr, header.Size)
