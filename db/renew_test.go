@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/rand"
 	"io"
 	"net"
 	"net/http"
@@ -28,6 +29,7 @@ var now = time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC)
 
 // memStorage is a CloudStorage holding one object in memory.
 type memStorage struct {
+	readErr   error // makes the body fail partway
 	data      []byte
 	etag      string
 	stored    time.Time
@@ -40,10 +42,14 @@ func (m *memStorage) UploadWithMetadata(key string, r io.Reader, meta map[string
 	b, err := io.ReadAll(r)
 	m.uploads++
 	m.uploaded = b
+	m.data, m.etag, m.stored = b, meta["etag"], now
 	return err
 }
 func (m *memStorage) Download(string) (io.ReadCloser, error) {
 	m.downloads++
+	if m.readErr != nil {
+		return io.NopCloser(io.MultiReader(bytes.NewReader(m.data[:10]), errReader{m.readErr})), nil
+	}
 	return io.NopCloser(bytes.NewReader(m.data)), nil
 }
 func (m *memStorage) GetMetadata(string) (map[string]string, error) {
@@ -69,6 +75,12 @@ type maxMindServer struct {
 }
 
 func maxMind(t *testing.T, mmdb []byte, status int) *maxMindServer {
+	return maxMindCut(t, mmdb, status, 0)
+}
+
+// maxMindCut is maxMind sending only the first cut bytes of the archive when
+// cut is non-zero.
+func maxMindCut(t *testing.T, mmdb []byte, status, cut int) *maxMindServer {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
@@ -87,7 +99,15 @@ func maxMind(t *testing.T, mmdb []byte, status int) *maxMindServer {
 			w.WriteHeader(304)
 		default:
 			w.Header().Set("Etag", "maxmind-v2")
-			_, _ = w.Write(buf.Bytes())
+			body := buf.Bytes()
+			if cut > 0 {
+				if cut >= len(body) {
+					t.Errorf("cut %d is not inside the %d-byte archive", cut, len(body))
+				} else {
+					body = body[:cut]
+				}
+			}
+			_, _ = w.Write(body)
 		}
 	}))
 	t.Cleanup(m.Close)
@@ -259,5 +279,81 @@ func TestDownloadErrorDoesNotLeakLicenseKey(t *testing.T) {
 		if strings.Contains(e.Message, "test-license-key") {
 			t.Errorf("log leaks the license key: %s", e.Message)
 		}
+	}
+}
+
+// A cloud copy whose body cannot be used must not become the version in
+// service: its ETag would make MaxMind answer 304 and later renews skip the
+// cloud, leaving the old database in place for good.
+func TestUnusableCloudUpdateDoesNotTakeOverTheETag(t *testing.T) {
+	observeLogs(t)
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	mm := maxMind(t, readFixture(t, "new.mmdb"), 0) // 304 for "maxmind-v2"
+	cloud := &memStorage{data: readFixture(t, "old.mmdb"), etag: "maxmind-v1", stored: now.Add(-24 * time.Hour)}
+	d := newTestDB(t, cloud, mm.URL)
+	if err := d.renew(); err != nil {
+		t.Fatal(err)
+	}
+	// Another instance stored v2, but this body is broken.
+	cloud.data, cloud.etag = []byte("not a database"), "maxmind-v2"
+	if err := d.renew(); err != nil {
+		t.Fatal(err)
+	}
+	// MaxMind was asked with the ETag of the copy in service (v1), not the
+	// unusable cloud one, so it sent v2 instead of a 304.
+	if len(mm.ifNoneMatch) != 1 || mm.ifNoneMatch[0] != "maxmind-v1" {
+		t.Errorf("If-None-Match sent: %q, want [maxmind-v1]", mm.ifNoneMatch)
+	}
+	if got := country(t, d); got != "TW" {
+		t.Errorf("serving %s, want TW from MaxMind", got)
+	}
+	// Only the database in service is left on disk.
+	if left, _ := os.ReadDir(tmp); len(left) != 1 {
+		t.Errorf("%d files in the temp dir, want only the one in service", len(left))
+	}
+}
+
+type errReader struct{ err error }
+
+func (e errReader) Read([]byte) (int, error) { return 0, e.err }
+
+// A fetch that fails partway leaves no temp file behind: /tmp is memory on
+// Cloud Run.
+func TestFailedFetchLeavesNoTempFile(t *testing.T) {
+	observeLogs(t)
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	mm := maxMind(t, nil, 500)
+	cloud := &memStorage{data: readFixture(t, "old.mmdb"), etag: "e", stored: now.Add(-24 * time.Hour), readErr: io.ErrUnexpectedEOF}
+	d := newTestDB(t, cloud, mm.URL)
+	if err := d.renew(); err == nil {
+		t.Fatal("renew succeeded with no usable database")
+	}
+	left, _ := os.ReadDir(tmp)
+	if len(left) != 0 {
+		t.Errorf("%d temp files left behind", len(left))
+	}
+}
+
+func TestTruncatedDownloadLeavesNoTempFile(t *testing.T) {
+	observeLogs(t)
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	// An incompressible payload, so cutting the archive in half lands inside
+	// the file body.
+	payload := make([]byte, 64<<10)
+	_, _ = rand.Read(payload)
+	mm := maxMindCut(t, payload, 0, 32<<10)
+	cloud := &memStorage{data: readFixture(t, "old.mmdb"), etag: "e", stored: now.Add(-30 * 24 * time.Hour)}
+	d := newTestDB(t, cloud, mm.URL)
+	if err := d.renew(); err != nil {
+		t.Fatal(err)
+	}
+	if got := country(t, d); got != "JP" {
+		t.Errorf("serving %s, want the cloud copy (JP)", got)
+	}
+	if left, _ := os.ReadDir(tmp); len(left) != 1 {
+		t.Errorf("%d files in the temp dir, want only the one in service", len(left))
 	}
 }
