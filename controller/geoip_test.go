@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -128,6 +129,31 @@ func TestCacheHoldsNoIPAndHitsRestoreIt(t *testing.T) {
 	for k, v := range store {
 		if strings.Contains(k, ip) || strings.Contains(string(v), ip) {
 			t.Errorf("cache entry holds the IP: %s = %s", k, v)
+		}
+	}
+}
+
+func TestLookupFailureIsNotEchoed(t *testing.T) {
+	const ip = "2001:db8::7"
+	fakeCache(t)
+	core, _ := observer.New(zapcore.DebugLevel)
+	defer log.Replace(zap.New(core))()
+	// The GeoIP reader's own error quotes the address.
+	lookupErr := fmt.Errorf("error looking up '%s': IPv6 address in an IPv4-only database", ip)
+	prevCity, prevCountry := queryCity, queryCountry
+	queryCity = func(net.IP) (*db.City, error) { return nil, lookupErr }
+	queryCountry = func(net.IP) (*db.Country, error) { return nil, lookupErr }
+	t.Cleanup(func() { queryCity, queryCountry = prevCity, prevCountry })
+
+	c := &GeoIPController{}
+	for name, h := range map[string]http.HandlerFunc{"city": c.City, "country": c.Country} {
+		rec := httptest.NewRecorder()
+		h(rec, httptest.NewRequest("GET", "/v1/"+name+"?ip="+ip, nil))
+		if rec.Code != 500 {
+			t.Errorf("%s: status %d, want 500", name, rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "2001:db8") {
+			t.Errorf("%s: 500 body echoes the address: %q", name, rec.Body.String())
 		}
 	}
 }
