@@ -8,6 +8,15 @@ import (
 	"service/log"
 )
 
+// Seams for tests: the handlers reach redis and the GeoIP database only
+// through these.
+var (
+	cacheGet     = cache.Unmarshal
+	cacheSet     = cache.Marshal
+	queryCity    = db.QueryCity
+	queryCountry = db.QueryCountry
+)
+
 // GeoIPController never writes the queried IP to logs or error messages:
 // callers may promise their users that the IP is not recorded.
 type GeoIPController struct {
@@ -25,7 +34,7 @@ func (c *GeoIPController) City(w http.ResponseWriter, r *http.Request) {
 	}
 	cacheKey := cache.IPKey("city", ip)
 	var city db.City
-	err := cache.Unmarshal(cacheKey, &city)
+	err := cacheGet(cacheKey, &city)
 	if err == nil {
 		log.Debugf("Hit city location cache")
 		city.IP = ip.String()
@@ -37,13 +46,13 @@ func (c *GeoIPController) City(w http.ResponseWriter, r *http.Request) {
 		return
 	} else {
 		log.Debugf("Querying city location")
-		city, err := db.QueryCity(ip)
+		city, err := queryCity(ip)
 		if err != nil {
 			// The lookup error can quote the address.
 			http.Error(w, "Failed to look up IP address", 500)
 			return
 		}
-		err = cache.Marshal(cacheKey, withoutCityIP(city))
+		err = cacheSet(cacheKey, withoutCityIP(city))
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -65,7 +74,7 @@ func (c *GeoIPController) Country(w http.ResponseWriter, r *http.Request) {
 	}
 	cacheKey := cache.IPKey("country", ip)
 	var country db.Country
-	err := cache.Unmarshal(cacheKey, &country)
+	err := cacheGet(cacheKey, &country)
 	if err == nil {
 		log.Debugf("Hit country location cache")
 		country.IP = ip.String()
@@ -77,13 +86,13 @@ func (c *GeoIPController) Country(w http.ResponseWriter, r *http.Request) {
 		return
 	} else {
 		log.Debugf("Querying country location")
-		country, err := db.QueryCountry(ip)
+		country, err := queryCountry(ip)
 		if err != nil {
 			// The lookup error can quote the address.
 			http.Error(w, "Failed to look up IP address", 500)
 			return
 		}
-		err = cache.Marshal(cacheKey, withoutCountryIP(country))
+		err = cacheSet(cacheKey, withoutCountryIP(country))
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return

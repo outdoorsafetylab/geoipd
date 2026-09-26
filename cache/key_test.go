@@ -36,3 +36,16 @@ func TestIPKeySeparatesIPsAndKinds(t *testing.T) {
 		t.Error("IPv4-mapped form gets a different key")
 	}
 }
+
+func TestIPKeyDependsOnTheSecret(t *testing.T) {
+	ip := net.ParseIP("203.0.113.7")
+	before := IPKey("country", ip)
+	prev := keySecret
+	keySecret = []byte("another secret")
+	defer func() { keySecret = prev }()
+	// An unkeyed hash of the IP would not move, and could be reversed by
+	// hashing every IPv4 address.
+	if IPKey("country", ip) == before {
+		t.Error("key does not depend on the secret")
+	}
+}
