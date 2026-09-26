@@ -28,6 +28,7 @@ func (c *GeoIPController) City(w http.ResponseWriter, r *http.Request) {
 	err := cache.Unmarshal(cacheKey, &city)
 	if err == nil {
 		log.Debugf("Hit city location cache")
+		city.IP = ip.String()
 		writeJSON(w, r, &city)
 		return
 	}
@@ -42,7 +43,7 @@ func (c *GeoIPController) City(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to look up IP address", 500)
 			return
 		}
-		err = cache.Marshal(cacheKey, city)
+		err = cache.Marshal(cacheKey, withoutCityIP(city))
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -67,6 +68,7 @@ func (c *GeoIPController) Country(w http.ResponseWriter, r *http.Request) {
 	err := cache.Unmarshal(cacheKey, &country)
 	if err == nil {
 		log.Debugf("Hit country location cache")
+		country.IP = ip.String()
 		writeJSON(w, r, &country)
 		return
 	}
@@ -81,7 +83,7 @@ func (c *GeoIPController) Country(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to look up IP address", 500)
 			return
 		}
-		err = cache.Marshal(cacheKey, country)
+		err = cache.Marshal(cacheKey, withoutCountryIP(country))
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -89,4 +91,18 @@ func (c *GeoIPController) Country(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, r, country)
 		return
 	}
+}
+
+// The cached value leaves the IP out as the key does; a hit puts it back.
+
+func withoutCityIP(c *db.City) *db.City {
+	out := *c
+	out.IP = ""
+	return &out
+}
+
+func withoutCountryIP(c *db.Country) *db.Country {
+	out := *c
+	out.IP = ""
+	return &out
 }
