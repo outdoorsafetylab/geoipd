@@ -228,6 +228,8 @@ func TestStaleCloudCopyIsTheFallback(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			observeLogs(t)
+			tmp := t.TempDir()
+			t.Setenv("TMPDIR", tmp)
 			mm := maxMind(t, tc.mmdb, tc.status)
 			cloud := &memStorage{data: readFixture(t, "old.mmdb"), etag: "maxmind-v1", stored: now.Add(-30 * 24 * time.Hour)}
 			d := newTestDB(t, cloud, mm.URL)
@@ -239,6 +241,9 @@ func TestStaleCloudCopyIsTheFallback(t *testing.T) {
 			}
 			if cloud.uploads != 0 {
 				t.Errorf("stored %d copies back without a usable download", cloud.uploads)
+			}
+			if left, _ := os.ReadDir(tmp); len(left) != 1 {
+				t.Errorf("%d files in the temp dir, want only the one in service", len(left))
 			}
 		})
 	}

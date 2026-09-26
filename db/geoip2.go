@@ -288,7 +288,10 @@ func (db *geoIP2DB) use(f fetched) error {
 		return err
 	}
 	db.etag = f.etag
+	// Queries read modTime under the lock.
+	db.Lock()
 	db.modTime = f.modTime
+	db.Unlock()
 	return nil
 }
 
