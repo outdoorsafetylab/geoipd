@@ -4,6 +4,7 @@ log:
 geoip2:
   edition: GeoLite2-Country
   renew: 60s  # Check for updates every 60 seconds
+  # max_age: 168h  # Refresh a cloud copy stored longer ago than this (default 168h; Go duration, so no "7d")
   # Cloud storage configuration (optional)
   # If configured, database will be stored in cloud storage
   # cloud_storage:

@@ -127,6 +127,7 @@ func newTestDB(t *testing.T, cloud *memStorage, url string) *geoIP2DB {
 		edition:     edition,
 		maxAge:      7 * 24 * time.Hour,
 		downloadURL: url + "/download?edition_id=%s&license_key=%s",
+		client:      &http.Client{Timeout: 5 * time.Second},
 		now:         func() time.Time { return now },
 	}
 	if cloud != nil {
@@ -360,5 +361,67 @@ func TestTruncatedDownloadLeavesNoTempFile(t *testing.T) {
 	}
 	if left, _ := os.ReadDir(tmp); len(left) != 1 {
 		t.Errorf("%d files in the temp dir, want only the one in service", len(left))
+	}
+}
+
+// A MaxMind that accepts the connection and then goes silent must end in the
+// fallback, not hold startup.
+func TestStalledDownloadFallsBack(t *testing.T) {
+	observeLogs(t)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+	cloud := &memStorage{data: readFixture(t, "old.mmdb"), etag: "e", stored: now.Add(-30 * 24 * time.Hour)}
+	d := newTestDB(t, cloud, srv.URL)
+	d.client = &http.Client{Timeout: 200 * time.Millisecond}
+	done := make(chan error, 1)
+	go func() { done <- d.renew() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("renew still waiting on a silent MaxMind")
+	}
+	if got := country(t, d); got != "JP" {
+		t.Errorf("serving %s, want the cloud copy (JP)", got)
+	}
+}
+
+// Once a database is in service, a failed refresh keeps it: the ticker must
+// never take down or replace a working database with nothing.
+func TestFailedRefreshKeepsTheOpenDatabase(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mmdb   []byte
+		status int
+	}{
+		"http error":   {nil, 500},
+		"corrupt file": {[]byte("not a database"), 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observeLogs(t)
+			mm := maxMind(t, tc.mmdb, tc.status)
+			cloud := &memStorage{data: readFixture(t, "old.mmdb"), etag: "maxmind-v1", stored: now.Add(-24 * time.Hour)}
+			d := newTestDB(t, cloud, mm.URL)
+			if err := d.renew(); err != nil {
+				t.Fatal(err)
+			}
+			cloud.data = nil // the cloud copy is gone by the time the ticker fires
+			if err := d.renew(); err != nil {
+				t.Fatalf("refresh failed the running service: %v", err)
+			}
+			if mm.hits != 1 {
+				t.Errorf("MaxMind asked %d times, want 1", mm.hits)
+			}
+			if got := country(t, d); got != "JP" {
+				t.Errorf("serving %s, want the open database (JP)", got)
+			}
+			if cloud.uploads != 0 {
+				t.Errorf("stored %d copies back from a failed refresh", cloud.uploads)
+			}
+		})
 	}
 }

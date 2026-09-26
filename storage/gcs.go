@@ -42,7 +42,10 @@ func NewGCSStorage(config *Config) (*GCSStorage, error) {
 
 // UploadWithMetadata uploads data with metadata to GCS
 func (g *GCSStorage) UploadWithMetadata(key string, data io.Reader, metadata map[string]string) error {
-	ctx := context.Background()
+	// Cancelling the writer's context aborts the upload; Close alone would
+	// commit whatever was written so far as the new object.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	fullKey := g.getFullKey(key)
 
 	obj := g.client.Bucket(g.bucket).Object(fullKey)
@@ -55,6 +58,7 @@ func (g *GCSStorage) UploadWithMetadata(key string, data io.Reader, metadata map
 
 	// Copy data
 	if _, err := io.Copy(writer, data); err != nil {
+		cancel()
 		writer.Close()
 		return fmt.Errorf("failed to upload to GCS: %w", err)
 	}

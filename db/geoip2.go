@@ -135,11 +135,16 @@ type geoIP2DB struct {
 	maxAge time.Duration
 	// downloadURL is the MaxMind download URL format: edition, license key.
 	downloadURL string
-	now         func() time.Time
+	// client bounds a MaxMind download: a stale cloud copy puts it on the
+	// startup path, and a stalled connection must end in the fallback rather
+	// than hold startup.
+	client *http.Client
+	now    func() time.Time
 }
 
 const (
 	defaultMaxAge      = 7 * 24 * time.Hour
+	downloadTimeout    = 2 * time.Minute
 	maxMindDownloadURL = "https://download.maxmind.com/app/geoip_download?edition_id=%s&license_key=%s&suffix=tar.gz"
 )
 
@@ -183,6 +188,7 @@ func newGeoIP2DB(licenseKey, edition string) *geoIP2DB {
 		cloudStorage: cloudStorage,
 		maxAge:       maxAge,
 		downloadURL:  maxMindDownloadURL,
+		client:       &http.Client{Timeout: downloadTimeout},
 		now:          time.Now,
 	}
 }
@@ -402,7 +408,7 @@ func (db *geoIP2DB) download() (fetched, error) {
 	if db.etag != "" {
 		req.Header.Set("If-None-Match", db.etag)
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := db.client.Do(req)
 	if err != nil {
 		// A *url.Error quotes the URL, and the URL carries the license key.
 		var urlErr *url.Error
