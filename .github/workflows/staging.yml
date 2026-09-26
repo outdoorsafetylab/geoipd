@@ -62,7 +62,7 @@ jobs:
           --platform=managed \
           --set-env-vars=GEOIP2_CLOUD_STORAGE_BUCKET=geoipd \
           --set-env-vars=GEOIP2_CLOUD_STORAGE_PROVIDER=gcs \
-          --memory=128Mi \
+          --memory=256Mi \
           --cpu=1 \
           --allow-unauthenticated
 

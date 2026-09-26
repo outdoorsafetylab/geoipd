@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 RUN apk update \
     && apk upgrade \
@@ -17,7 +17,7 @@ RUN make clean \
     && make tidy \
     && make GIT_HASH=${GIT_HASH} GIT_TAG=${GIT_TAG}
 
-FROM alpine:3.16
+FROM alpine:3.24
 
 RUN apk update \
     && apk upgrade \
