@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -129,7 +130,23 @@ type geoIP2DB struct {
 	path         string
 	reader       *geoip2.Reader
 	cloudStorage storage.CloudStorage
+	// maxAge is how long ago the cloud copy may have been stored before
+	// MaxMind is asked for a newer one.
+	maxAge time.Duration
+	// downloadURL is the MaxMind download URL format: edition, license key.
+	downloadURL string
+	// client bounds a MaxMind download: a stale cloud copy puts it on the
+	// startup path, and a stalled connection must end in the fallback rather
+	// than hold startup.
+	client *http.Client
+	now    func() time.Time
 }
+
+const (
+	defaultMaxAge      = 7 * 24 * time.Hour
+	downloadTimeout    = 2 * time.Minute
+	maxMindDownloadURL = "https://download.maxmind.com/app/geoip_download?edition_id=%s&license_key=%s&suffix=tar.gz"
+)
 
 func newGeoIP2DB(licenseKey, edition string) *geoIP2DB {
 	cfg := config.Get()
@@ -155,36 +172,139 @@ func newGeoIP2DB(licenseKey, edition string) *geoIP2DB {
 		}
 	}
 
+	maxAge := defaultMaxAge
+	if v := cfg.GetString("geoip2.max_age"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			log.Errorf("Invalid geoip2.max_age %q, using %s", v, defaultMaxAge)
+		} else {
+			maxAge = d
+		}
+	}
+
 	return &geoIP2DB{
 		licenseKey:   licenseKey,
 		edition:      edition,
 		cloudStorage: cloudStorage,
+		maxAge:       maxAge,
+		downloadURL:  maxMindDownloadURL,
+		client:       &http.Client{Timeout: downloadTimeout},
+		now:          time.Now,
 	}
 }
 
 func (db *geoIP2DB) renew() error {
-	// If cloud storage is configured, try to load from there first
-	if db.cloudStorage != nil {
-		path, err := db.loadFromCloudStorage()
-		if err != nil {
-			log.Warnf("Failed to load from cloud storage: %s", err.Error())
-			// Fall through to download from MaxMind
-		} else if path != "" {
-			// Successfully loaded from cloud storage
-			return db.openDatabase(path)
+	// A cloud copy that has not been refreshed from MaxMind within maxAge is
+	// skipped: on a platform that scales to zero an instance rarely lives until
+	// the renew ticker fires, so this is where a stale copy gets replaced.
+	// Deciding from the object's timestamp, before its body is fetched, keeps a
+	// single database file on disk at a time.
+	if db.cloudStorage != nil && !db.cloudCopyStale() {
+		if db.openFromCloud() {
+			return nil
 		}
+		// Unchanged since the last load (renew ticker), missing or unusable:
+		// ask MaxMind.
 	}
 
-	// Download from MaxMind (either no cloud storage or cloud storage failed/empty)
-	path, err := db.download()
-	if err != nil {
-		return err
+	f, err := db.download()
+	switch {
+	case err != nil:
+		log.Warnf("MaxMind download failed: %s", err.Error())
+	case f.path == "":
+		// 304: MaxMind has nothing newer than the ETag we sent.
+	default:
+		if err = db.use(f); err == nil {
+			// Store only a copy that opened, so a bad download never
+			// replaces the cloud copy other instances fall back on.
+			if db.cloudStorage != nil {
+				if err := db.storeInCloudStorage(f.path); err != nil {
+					log.Errorf("Failed to store in cloud storage: %s", err.Error())
+				}
+			}
+			return nil
+		}
+		os.Remove(f.path)
 	}
-	if path == "" {
+
+	// MaxMind gave nothing usable. Keep what is open, else fall back to the
+	// cloud copy however old it is.
+	if db.hasReader() {
 		return nil
 	}
+	if db.cloudStorage != nil && db.openFromCloud() {
+		return nil
+	}
+	if err == nil {
+		err = errors.New("no GeoIP database available")
+	}
+	return err
+}
 
-	return db.openDatabase(path)
+// cloudCopyStale reports whether the cloud copy was last stored longer ago than
+// maxAge. A copy is stored only after a MaxMind download, so this is the time
+// since the last refresh. Any error reads as not stale, which keeps the
+// behaviour from before maxAge existed.
+func (db *geoIP2DB) cloudCopyStale() bool {
+	key := fmt.Sprintf("%s.mmdb", db.edition)
+	exists, err := db.cloudStorage.Exists(key)
+	if err != nil || !exists {
+		return false
+	}
+	stored, err := db.cloudStorage.GetLastModified(key)
+	if err != nil {
+		log.Warnf("Failed to get cloud copy time: %s", err.Error())
+		return false
+	}
+	if age := db.now().Sub(stored); age > db.maxAge {
+		log.Infof("Cloud copy was stored %s, older than %s; checking MaxMind", stored.Format(time.RFC3339), db.maxAge)
+		return true
+	}
+	return false
+}
+
+// openFromCloud loads and opens the cloud copy, reporting whether a new
+// database is now in service.
+func (db *geoIP2DB) openFromCloud() bool {
+	f, err := db.loadFromCloudStorage()
+	if err != nil {
+		log.Warnf("Failed to load from cloud storage: %s", err.Error())
+		return false
+	}
+	if f.path == "" {
+		return false
+	}
+	if err := db.use(f); err != nil {
+		os.Remove(f.path)
+		return false
+	}
+	return true
+}
+
+// fetched is a database file on disk and what identifies its version.
+type fetched struct {
+	path    string
+	etag    string
+	modTime time.Time
+}
+
+// use opens f and, only once it is in service, records its ETag and time.
+func (db *geoIP2DB) use(f fetched) error {
+	if err := db.openDatabase(f.path); err != nil {
+		return err
+	}
+	db.etag = f.etag
+	// Queries read modTime under the lock.
+	db.Lock()
+	db.modTime = f.modTime
+	db.Unlock()
+	return nil
+}
+
+func (db *geoIP2DB) hasReader() bool {
+	db.Lock()
+	defer db.Unlock()
+	return db.reader != nil
 }
 
 func (db *geoIP2DB) openDatabase(path string) error {
@@ -209,23 +329,26 @@ func (db *geoIP2DB) openDatabase(path string) error {
 	return nil
 }
 
-func (db *geoIP2DB) loadFromCloudStorage() (string, error) {
+// loadFromCloudStorage fetches the cloud copy into a temp file. It leaves
+// db.etag and db.modTime alone: they describe the database in service, and
+// the caller sets them once this file has opened.
+func (db *geoIP2DB) loadFromCloudStorage() (fetched, error) {
 	key := fmt.Sprintf("%s.mmdb", db.edition)
 
 	// Check if database exists in cloud storage
 	exists, err := db.cloudStorage.Exists(key)
 	if err != nil {
-		return "", fmt.Errorf("failed to check cloud storage: %w", err)
+		return fetched{}, fmt.Errorf("failed to check cloud storage: %w", err)
 	}
 	if !exists {
 		log.Infof("Database not found in cloud storage: %s", key)
-		return "", nil
+		return fetched{}, nil
 	}
 
 	// Get ETag from cloud storage metadata
 	metadata, err := db.cloudStorage.GetMetadata(key)
 	if err != nil {
-		return "", fmt.Errorf("failed to get metadata from cloud storage: %w", err)
+		return fetched{}, fmt.Errorf("failed to get metadata from cloud storage: %w", err)
 	}
 
 	cloudETag := metadata["etag"]
@@ -233,31 +356,31 @@ func (db *geoIP2DB) loadFromCloudStorage() (string, error) {
 		// Check if ETag has changed since last load
 		if db.etag == cloudETag {
 			log.Infof("Cloud storage ETag unchanged: %s - skipping download", cloudETag)
-			return "", nil // No download needed
+			return fetched{}, nil // No download needed
 		}
 
 		log.Infof("Found new ETag in cloud storage: %s (previous: %s)", cloudETag, db.etag)
-		db.etag = cloudETag
 	}
 
 	// Download database from cloud storage
 	reader, err := db.cloudStorage.Download(key)
 	if err != nil {
-		return "", fmt.Errorf("failed to download from cloud storage: %w", err)
+		return fetched{}, fmt.Errorf("failed to download from cloud storage: %w", err)
 	}
 	defer reader.Close()
 
 	// Create temporary file
 	outfile, err := os.CreateTemp("", db.edition)
 	if err != nil {
-		return "", fmt.Errorf("failed to create temp file: %w", err)
+		return fetched{}, fmt.Errorf("failed to create temp file: %w", err)
 	}
 	defer outfile.Close()
 
 	// Copy data to temporary file
 	_, err = io.Copy(outfile, reader)
 	if err != nil {
-		return "", fmt.Errorf("failed to copy data from cloud storage: %w", err)
+		os.Remove(outfile.Name())
+		return fetched{}, fmt.Errorf("failed to copy data from cloud storage: %w", err)
 	}
 
 	// Get modification time
@@ -266,40 +389,48 @@ func (db *geoIP2DB) loadFromCloudStorage() (string, error) {
 		log.Warnf("Failed to get modification time from cloud storage: %s", err.Error())
 		modTime = time.Now()
 	}
-	db.modTime = modTime
 
 	log.Infof("Successfully loaded database from cloud storage: %s", outfile.Name())
-	return outfile.Name(), nil
+	return fetched{path: outfile.Name(), etag: cloudETag, modTime: modTime}, nil
 }
 
-func (db *geoIP2DB) download() (string, error) {
-	url := fmt.Sprintf("https://download.maxmind.com/app/geoip_download?edition_id=%s&license_key=%s&suffix=tar.gz", db.edition, db.licenseKey)
-	req, err := http.NewRequest("GET", url, nil)
+// download fetches a newer database from MaxMind into a temp file, or returns
+// an empty path when MaxMind reports no change. Like loadFromCloudStorage it
+// leaves db.etag and db.modTime to the caller.
+func (db *geoIP2DB) download() (fetched, error) {
+	u := fmt.Sprintf(db.downloadURL, db.edition, db.licenseKey)
+	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
-		log.Errorf("Failed to create request: %s", err.Error())
-		return "", err
+		// The parse error would quote the URL, license key included.
+		log.Errorf("Failed to create download request for %s", db.edition)
+		return fetched{}, fmt.Errorf("download %s: invalid request URL", db.edition)
 	}
 	if db.etag != "" {
 		req.Header.Set("If-None-Match", db.etag)
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := db.client.Do(req)
 	if err != nil {
-		return "", err
+		// A *url.Error quotes the URL, and the URL carries the license key.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return fetched{}, fmt.Errorf("download %s: %w", db.edition, err)
 	}
 	defer res.Body.Close()
 	switch res.StatusCode {
 	case 200:
 	case 304:
 		log.Infof("Not modified: %s => %s", db.edition, db.etag)
-		return "", nil
+		return fetched{}, nil
 	default:
 		log.Errorf("Failed to download %s: %s", db.edition, res.Status)
-		return "", errors.New(res.Status)
+		return fetched{}, errors.New(res.Status)
 	}
 	gr, err := gzip.NewReader(res.Body)
 	if err != nil {
 		log.Errorf("Failed to read gzip stream: %s", err.Error())
-		return "", err
+		return fetched{}, err
 	}
 	filename := fmt.Sprintf("%s.mmdb", db.edition)
 	tr := tar.NewReader(gr)
@@ -309,7 +440,7 @@ func (db *geoIP2DB) download() (string, error) {
 			break
 		} else if err != nil {
 			log.Errorf("Failed to iterate tar stream: %s", err.Error())
-			return "", err
+			return fetched{}, err
 		}
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -318,34 +449,22 @@ func (db *geoIP2DB) download() (string, error) {
 				outfile, err := os.CreateTemp("", db.edition)
 				if err != nil {
 					log.Errorf("Failed to create temp file: %s", err.Error())
-					return "", err
+					return fetched{}, err
 				}
 				defer outfile.Close()
 				log.Infof("Downloading DB: %s => %d bytes", filename, header.Size)
 				_, err = io.CopyN(outfile, tr, header.Size)
 				if err != nil {
+					os.Remove(outfile.Name())
 					log.Errorf("Failed to copy tar stream: %s", err.Error())
-					return "", err
+					return fetched{}, err
 				}
-				db.etag = res.Header.Get("Etag")
-				db.modTime = header.ModTime
-				log.Infof("Updating etag: %s => %s", filename, db.etag)
-
-				// Store in cloud storage if configured
-				if db.cloudStorage != nil {
-					err := db.storeInCloudStorage(outfile.Name())
-					if err != nil {
-						log.Errorf("Failed to store in cloud storage: %s", err.Error())
-						// Don't fail the download, just log the error
-					}
-				}
-
-				return outfile.Name(), nil
+				return fetched{path: outfile.Name(), etag: res.Header.Get("Etag"), modTime: header.ModTime}, nil
 			} else {
 				_, err := io.CopyN(io.Discard, tr, header.Size)
 				if err != nil {
 					log.Errorf("Failed to drain tar stream: %s", err.Error())
-					return "", err
+					return fetched{}, err
 				}
 			}
 		default:
@@ -353,7 +472,7 @@ func (db *geoIP2DB) download() (string, error) {
 		}
 	}
 	log.Errorf("Not found: %s", filename)
-	return "", fmt.Errorf("not found: %s", filename)
+	return fetched{}, fmt.Errorf("not found: %s", filename)
 }
 
 func (db *geoIP2DB) storeInCloudStorage(localPath string) error {
