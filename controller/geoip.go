@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"service/cache"
@@ -24,7 +23,7 @@ func (c *GeoIPController) City(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid IP address", 400)
 		return
 	}
-	cacheKey := fmt.Sprintf("city:%s", remoteAddr)
+	cacheKey := cache.IPKey("city", ip)
 	var city db.City
 	err := cache.Unmarshal(cacheKey, &city)
 	if err == nil {
@@ -63,7 +62,7 @@ func (c *GeoIPController) Country(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid IP address", 400)
 		return
 	}
-	cacheKey := fmt.Sprintf("country:%s", remoteAddr)
+	cacheKey := cache.IPKey("country", ip)
 	var country db.Country
 	err := cache.Unmarshal(cacheKey, &country)
 	if err == nil {
