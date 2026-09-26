@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -129,7 +130,18 @@ type geoIP2DB struct {
 	path         string
 	reader       *geoip2.Reader
 	cloudStorage storage.CloudStorage
+	// maxAge is how old the cloud copy may be, by its own build date, before
+	// MaxMind is asked for a newer one.
+	maxAge time.Duration
+	// downloadURL is the MaxMind download URL format: edition, license key.
+	downloadURL string
+	now         func() time.Time
 }
+
+const (
+	defaultMaxAge      = 7 * 24 * time.Hour
+	maxMindDownloadURL = "https://download.maxmind.com/app/geoip_download?edition_id=%s&license_key=%s&suffix=tar.gz"
+)
 
 func newGeoIP2DB(licenseKey, edition string) *geoIP2DB {
 	cfg := config.Get()
@@ -155,10 +167,23 @@ func newGeoIP2DB(licenseKey, edition string) *geoIP2DB {
 		}
 	}
 
+	maxAge := defaultMaxAge
+	if v := cfg.GetString("geoip2.max_age"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			log.Errorf("Invalid geoip2.max_age %q, using %s", v, defaultMaxAge)
+		} else {
+			maxAge = d
+		}
+	}
+
 	return &geoIP2DB{
 		licenseKey:   licenseKey,
 		edition:      edition,
 		cloudStorage: cloudStorage,
+		maxAge:       maxAge,
+		downloadURL:  maxMindDownloadURL,
+		now:          time.Now,
 	}
 }
 
@@ -170,14 +195,28 @@ func (db *geoIP2DB) renew() error {
 			log.Warnf("Failed to load from cloud storage: %s", err.Error())
 			// Fall through to download from MaxMind
 		} else if path != "" {
-			// Successfully loaded from cloud storage
-			return db.openDatabase(path)
+			if err := db.openDatabase(path); err != nil {
+				return err
+			}
+			// On a platform that scales to zero an instance rarely lives until
+			// the renew ticker fires, so a cloud copy would never be replaced.
+			// Check its age here instead.
+			built := db.builtAt()
+			if db.now().Sub(built) <= db.maxAge {
+				return nil
+			}
+			log.Infof("Cloud copy was built %s, older than %s; checking MaxMind", built.Format(time.RFC3339), db.maxAge)
 		}
 	}
 
-	// Download from MaxMind (either no cloud storage or cloud storage failed/empty)
+	// Download from MaxMind (no cloud storage, cloud storage failed/empty or
+	// unchanged, or its copy is older than maxAge)
 	path, err := db.download()
 	if err != nil {
+		if db.hasReader() {
+			log.Warnf("Keeping the current DB: %s", err.Error())
+			return nil
+		}
 		return err
 	}
 	if path == "" {
@@ -185,6 +224,19 @@ func (db *geoIP2DB) renew() error {
 	}
 
 	return db.openDatabase(path)
+}
+
+// builtAt is the build date the open database carries in its metadata.
+func (db *geoIP2DB) builtAt() time.Time {
+	db.Lock()
+	defer db.Unlock()
+	return time.Unix(int64(db.reader.Metadata().BuildEpoch), 0)
+}
+
+func (db *geoIP2DB) hasReader() bool {
+	db.Lock()
+	defer db.Unlock()
+	return db.reader != nil
 }
 
 func (db *geoIP2DB) openDatabase(path string) error {
@@ -273,18 +325,24 @@ func (db *geoIP2DB) loadFromCloudStorage() (string, error) {
 }
 
 func (db *geoIP2DB) download() (string, error) {
-	url := fmt.Sprintf("https://download.maxmind.com/app/geoip_download?edition_id=%s&license_key=%s&suffix=tar.gz", db.edition, db.licenseKey)
-	req, err := http.NewRequest("GET", url, nil)
+	u := fmt.Sprintf(db.downloadURL, db.edition, db.licenseKey)
+	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
-		log.Errorf("Failed to create request: %s", err.Error())
-		return "", err
+		// The parse error would quote the URL, license key included.
+		log.Errorf("Failed to create download request for %s", db.edition)
+		return "", fmt.Errorf("download %s: invalid request URL", db.edition)
 	}
 	if db.etag != "" {
 		req.Header.Set("If-None-Match", db.etag)
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		// A *url.Error quotes the URL, and the URL carries the license key.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return "", fmt.Errorf("download %s: %w", db.edition, err)
 	}
 	defer res.Body.Close()
 	switch res.StatusCode {
