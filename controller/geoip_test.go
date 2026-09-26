@@ -18,8 +18,6 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
-// The cache-hit, lookup and lookup-failure paths need redis and a GeoIP
-// database, so only the 400 path is covered here.
 func TestInvalidIPIsNotEchoed(t *testing.T) {
 	// Looks like a documentation address (RFC 5737) but does not parse.
 	const input = "203.0.113.700"
@@ -136,7 +134,7 @@ func TestCacheHoldsNoIPAndHitsRestoreIt(t *testing.T) {
 func TestLookupFailureIsNotEchoed(t *testing.T) {
 	const ip = "2001:db8::7"
 	fakeCache(t)
-	core, _ := observer.New(zapcore.DebugLevel)
+	core, logs := observer.New(zapcore.DebugLevel)
 	defer log.Replace(zap.New(core))()
 	// The GeoIP reader's own error quotes the address.
 	lookupErr := fmt.Errorf("error looking up '%s': IPv6 address in an IPv4-only database", ip)
@@ -154,6 +152,11 @@ func TestLookupFailureIsNotEchoed(t *testing.T) {
 		}
 		if strings.Contains(rec.Body.String(), "2001:db8") {
 			t.Errorf("%s: 500 body echoes the address: %q", name, rec.Body.String())
+		}
+	}
+	for _, e := range logs.All() {
+		if strings.Contains(e.Message, "2001:db8") {
+			t.Errorf("log entry contains the address: %s", e.Message)
 		}
 	}
 }
