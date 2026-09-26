@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"service/cache"
@@ -9,6 +8,17 @@ import (
 	"service/log"
 )
 
+// Seams for tests: the handlers reach redis and the GeoIP database only
+// through these.
+var (
+	cacheGet     = cache.Unmarshal
+	cacheSet     = cache.Marshal
+	queryCity    = db.QueryCity
+	queryCountry = db.QueryCountry
+)
+
+// GeoIPController never writes the queried IP to logs or error messages:
+// callers may promise their users that the IP is not recorded.
 type GeoIPController struct {
 }
 
@@ -19,14 +29,15 @@ func (c *GeoIPController) City(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := net.ParseIP(remoteAddr)
 	if ip == nil {
-		http.Error(w, fmt.Sprintf("Invalid IP address: %s", remoteAddr), 400)
+		http.Error(w, "Invalid IP address", 400)
 		return
 	}
-	cacheKey := fmt.Sprintf("city:%s", remoteAddr)
+	cacheKey := cache.IPKey("city", ip)
 	var city db.City
-	err := cache.Unmarshal(cacheKey, &city)
+	err := cacheGet(cacheKey, &city)
 	if err == nil {
-		log.Infof("Hit city location cache: %s", remoteAddr)
+		log.Debugf("Hit city location cache")
+		city.IP = ip.String()
 		writeJSON(w, r, &city)
 		return
 	}
@@ -34,13 +45,14 @@ func (c *GeoIPController) City(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	} else {
-		log.Infof("Querying city location: %s", remoteAddr)
-		city, err := db.QueryCity(ip)
+		log.Debugf("Querying city location")
+		city, err := queryCity(ip)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
+			// The lookup error can quote the address.
+			http.Error(w, "Failed to look up IP address", 500)
 			return
 		}
-		err = cache.Marshal(cacheKey, city)
+		err = cacheSet(cacheKey, withoutCityIP(city))
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -57,14 +69,15 @@ func (c *GeoIPController) Country(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := net.ParseIP(remoteAddr)
 	if ip == nil {
-		http.Error(w, fmt.Sprintf("Invalid IP address: %s", remoteAddr), 400)
+		http.Error(w, "Invalid IP address", 400)
 		return
 	}
-	cacheKey := fmt.Sprintf("country:%s", remoteAddr)
+	cacheKey := cache.IPKey("country", ip)
 	var country db.Country
-	err := cache.Unmarshal(cacheKey, &country)
+	err := cacheGet(cacheKey, &country)
 	if err == nil {
-		log.Infof("Hit country location cache: %s", remoteAddr)
+		log.Debugf("Hit country location cache")
+		country.IP = ip.String()
 		writeJSON(w, r, &country)
 		return
 	}
@@ -72,13 +85,14 @@ func (c *GeoIPController) Country(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	} else {
-		log.Infof("Querying country location: %s", remoteAddr)
-		country, err := db.QueryCountry(ip)
+		log.Debugf("Querying country location")
+		country, err := queryCountry(ip)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
+			// The lookup error can quote the address.
+			http.Error(w, "Failed to look up IP address", 500)
 			return
 		}
-		err = cache.Marshal(cacheKey, country)
+		err = cacheSet(cacheKey, withoutCountryIP(country))
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -86,4 +100,18 @@ func (c *GeoIPController) Country(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, r, country)
 		return
 	}
+}
+
+// The cached value leaves the IP out as the key does; a hit puts it back.
+
+func withoutCityIP(c *db.City) *db.City {
+	out := *c
+	out.IP = ""
+	return &out
+}
+
+func withoutCountryIP(c *db.Country) *db.Country {
+	out := *c
+	out.IP = ""
+	return &out
 }

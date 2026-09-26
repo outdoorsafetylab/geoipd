@@ -23,8 +23,11 @@ func Init() error {
 	}
 	config.DisableCaller = true
 	config.DisableStacktrace = true
-	config.Level.SetLevel(zap.DebugLevel)
-	var err error
+	level, err := parseLevel(cfg.GetString("log.level"))
+	if err != nil {
+		return err
+	}
+	config.Level.SetLevel(level)
 	logger, err = config.Build()
 	if err != nil {
 		return err
@@ -32,8 +35,29 @@ func Init() error {
 	return nil
 }
 
+// parseLevel defaults to Info: Debug output includes request dumps, so it
+// has to be asked for explicitly.
+func parseLevel(s string) (zapcore.Level, error) {
+	if s == "" {
+		return zap.InfoLevel, nil
+	}
+	var level zapcore.Level
+	if err := level.UnmarshalText([]byte(s)); err != nil {
+		return level, fmt.Errorf("invalid log.level %q: %w", s, err)
+	}
+	return level, nil
+}
+
 func Logger() *zap.Logger {
 	return logger
+}
+
+// Replace swaps the package logger, e.g. for an observer in tests, and
+// returns a function that restores the previous one.
+func Replace(l *zap.Logger) func() {
+	prev := logger
+	logger = l
+	return func() { logger = prev }
 }
 
 type Level int
